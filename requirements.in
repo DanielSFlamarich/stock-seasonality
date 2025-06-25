@@ -1,0 +1,22 @@
+# local package
+-e .
+
+# external requirements
+awscli
+python-dotenv>=0.5.1
+click
+Sphinx
+coverage
+flake8
+awswrangler
+prefect
+python_dateutil
+scipy
+scikit-learn
+typer
+PyYAML
+matplotlib
+seaborn
+datetime
+redshift_connector
+notebook

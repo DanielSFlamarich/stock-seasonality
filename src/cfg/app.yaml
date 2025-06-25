@@ -1,0 +1,5 @@
+# app configuration
+
+LONG_PROCESS_REFRESH_SECONDS : 30
+AWS_DEFAULT_REGION : "us-east-1"
+DATE_FORMAT : "%Y-%m-%d"

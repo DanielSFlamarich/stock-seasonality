@@ -1,0 +1,118 @@
+# =============== PYTHON ===============
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.log
+
+# Byte-compiled, coverage, and test files
+*.cover
+*.py,cover
+.cache/
+.coverage
+.coverage.*
+nosetests.xml
+coverage.xml
+*.coveragerc
+.tox/
+.junit.xml
+
+# Virtual environments
+.venv/
+env/
+ENV/
+venv/
+env.bak/
+*.env
+
+# Poetry-specific virtualenv
+.poetry/
+
+# pip-tools
+*.txt
+pip-wheel-metadata/
+
+# =============== NOTEBOOKS ===============
+.ipynb_checkpoints/
+*.nbconvert.ipynb
+*.nb.html
+
+# Jupyter runtime and metadata
+~$*.ipynb
+*.nbconvert/
+*.nbviewer/
+
+# =============== DATA ===============
+data/
+output/
+logs/
+results/
+tmp/
+temp/
+intermediate/
+checkpoints/
+models/
+*.h5
+*.hdf5
+*.pkl
+*.joblib
+*.npz
+*.npy
+*.csv
+*.tsv
+*.json
+*.xlsx
+*.zip
+
+# If you want to keep directory structure:
+# data/**/*
+!data/.gitkeep
+
+# =============== MLFLOW / TRACKING ===============
+mlruns/
+mlruns.db
+mlflow-artifacts/
+
+# Weights & Biases
+wandb/
+wandb-debug.log
+wandb/latest-run/
+
+# DVC
+.dvc/
+*.dvc
+.dvcignore
+
+# =============== IDEs ===============
+# VSCode
+.vscode/
+
+# PyCharm
+.idea/
+*.iml
+
+# Spyder
+.spyproject/
+
+# =============== BUILD ARTIFACTS ===============
+build/
+dist/
+*.egg-info/
+*.egg
+*.whl
+MANIFEST
+
+# =============== DOCKER / CI (if used) ===============
+*.pid
+*.pid.lock
+docker-compose.override.yml
+*.log
+*.bak
+
+# =============== CONFIG / SECRETS ===============
+.env
+.env.*
+secrets.*
+credentials.*
+cloud/config.yaml

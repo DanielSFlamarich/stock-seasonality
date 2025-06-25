@@ -1,0 +1,18 @@
+[project]
+name = "stock-seasonality"
+version = "0.1.0"
+description = "Seasonality patterns detector and analyser for daily stock data"
+authors = [{ name = "Niel S Flamarich" }]
+requires-python = ">=3.11"
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+select = ["E", "F", "I"]
