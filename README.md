@@ -1,20 +1,20 @@
 <!-- PROJECT LOGO -->
 <br />
 <div align="center">
-  <a href="https://github.com/github_username/repo_name">
+  <a href="https://github.com/DanielSFlamarich/stock-seasonality">
     <img src="data/external/img/some_logo_or_image.png" alt="Logo" width="80" height="80">
   </a>
 
-<h3 align="center">Project Name</h3>
+<h3 align="center">Stock Seasonality Analysis</h3>
 
   <p align="center">
-    In this repo you'll find everything you need to understand this project
+    In this README you'll find everything you need to install this project
     <br />
-    <a href="https://github.com/github_username/repo_name"><strong>Explore the docs »</strong></a>
+    <a href="https://github.com/DanielSFlamarich/stock-seasonality"><strong>Explore the docs »</strong></a>
     <br />
-    <a href="https://github.com/github_username/repo_name/issues">Report Bug</a>
+    <a href="https://github.com/DanielSFlamarich/stock-seasonality/issues">Report Bug</a>
     ·
-    <a href="https://github.com/github_username/repo_name/issues">Request Feature</a>
+    <a href="https://github.com/DanielSFlamarich/stock-seasonality/issues">Request Feature</a>
   </p>
 </div>
 
@@ -42,47 +42,77 @@
   </ol>
 </details>
 
+<!-- GETTING STARTED -->
+## About the Project
+**Stock Seasonality Analysis** is a research-focused Python project designed to explore **seasonal patterns in equities and ETFs** using publicly available data from [Yahoo Finance](https://finance.yahoo.com/).
+
+There’s a large body of evidence showing the **limits of predictability in financial markets**, including:
+
+-   The **Efficient Market Hypothesis (EMH)**
+
+-   [_The Adaptive Markets Hypothesis_ (Lo, 2004)](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4283395/)
+
+-   Studies demonstrating that most professional fund managers fail to consistently outperform benchmarks.
+
+The aim is to:
+-   Load, clean, and visualize historical data for a variety of tickers
+
+-   Spot **recurring seasonal trends** — such as monthly, quarterly, or annual behaviors
+
+-   Support **curiosity-driven exploration** across a broad universe of stocks, including unfamiliar tickers
+- Understanding **structure and historical behavior**, not forecasting the future
+
+-  Building **testable, modular functions** and a simple codebase with robust tooling
 
 <!-- GETTING STARTED -->
 ## Getting Started
-
-Example / instructions on setting up the project locally.
+This section helps you get the project up and running locally, step by step.
 
 ### Prerequisites
 
-We recommend using pyenv to manage multiple Python versions:
+To set up your environment reliably, we recommend the following:
 
-# Install Python 3.11 using pyenv
-pyenv install 3.11.9
-pyenv local 3.11.9
+-   **Python 3.11+** (managed via [`pyenv`](https://github.com/pyenv/pyenv))
 
-uv – fast package manager
-Install globally:
+-   [`uv`](https://github.com/astral-sh/uv) (fast Python package manager. Please do not use Conda; everytime anyone uses it a kitty dies)
 
-curl -LsSf https://astral.sh/uv/install.sh | sh
+-   [`pre-commit`](https://pre-commit.com/) (for automated linting and cleaning)
 
-Then ensure it's available:
-uv --version
+-   [`JupyterLab`](https://jupyterlab.readthedocs.io/en/stable/) (already included via dependencies, recommended for dashboard visualizations in notebooks)
+
+##### Install dependencies:
+On macOS:
+`brew install pyenv uv pre-commit`
+
+`uv` installation for Linux:
+`curl -LsSf https://astral.sh/uv/install.sh | sh`
 
 ### Installation
+##### 1. Clone the repo
+`git clone https://github.com/DanielSFlamarich/stock-seasonality.git`
+`cd stock-seasonality`
 
-git clone https://github.com/yourusername/stock-seasonality.git
-cd stock-seasonality
+##### 2. **Install Python version** (if not already):
+`pyenv install 3.11.9`
+`pyenv local 3.11.9`
 
-# Create a virtual environment using uv
-uv venv
-source .venv/bin/activate
+##### 3. Set up virtual environment
+`uv venv`
+`source .venv/bin/activate`
+`uv pip sync requirements.lock`
+>This will install all the pinned dependencies exactly as specified, ensuring reproducibility across environments.
 
-# Install dependencies from lock file
-uv pip install -r requirements.lock
 
-### Updating dependencies
+##### 4. Set up pre-commit hooks
+`pre-commit install`
+>This registers the hooks defined in .pre-commit-config.yaml to run automatically before every commit (e.g. Black, Ruff, isort, and internal ones)
 
-# Install from editable input file
-uv pip install -r requirements.in
 
-# Freeze and lock the environment
-uv pip freeze > requirements.lock
+
+##### 5.  (Optional) Update dependencies
+_If you've changed the list of top-level dependencies in `requirements.in`, regenerate the lock file:_
+`uv pip compile requirements.in`
+>This keeps your environment deterministic and reproducible.
 
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
@@ -92,32 +122,13 @@ uv pip freeze > requirements.lock
 ## Usage
 
 How to use this repo (WIP).
-
-_For more examples, please refer to the [Documentation](https://example.com)_
-
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-
-
-<!-- ROADMAP -->
-## Roadmap
-
-- [ ] Phase 1 Tasks
-    - [ ] 1. 1 Sub-Tasks
-    - [ ] 1. 2 Sub-Tasks
-- [ ] Phase 2 Tasks
-- [ ] Phase 3 Tasks
-
-See the [open issues](https://github.com/github_username/repo_name/issues) for a full list of proposed features (and known issues).
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
 
 
 <!-- CONTRIBUTING -->
 ## Contributing
 
-Contributions are great and an amazing way to learn and make our team better. Any contributions you make are **greatly appreciated**.
+Contributions are great and an amazing way to learn and make the project better. Any contributions you make are **greatly appreciated**.
 
 If you have a suggestion that would make this better, please clone the repo and create a pull request.
 

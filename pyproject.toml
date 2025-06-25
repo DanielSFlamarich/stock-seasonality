@@ -4,6 +4,12 @@ version = "0.1.0"
 description = "Seasonality patterns detector and analyser for daily stock data"
 authors = [{ name = "Niel S Flamarich" }]
 requires-python = ">=3.11"
+dependencies = [
+    "statsmodels>=0.14.4",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
 
 [tool.black]
 line-length = 88
@@ -15,4 +21,6 @@ profile = "black"
 [tool.ruff]
 line-length = 88
 target-version = "py311"
+
+[tool.ruff.lint]
 select = ["E", "F", "I"]
