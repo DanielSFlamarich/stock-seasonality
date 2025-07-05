@@ -44,25 +44,8 @@
 
 <!-- GETTING STARTED -->
 ## About the Project
-**Stock Seasonality Analysis** is a research-focused Python project designed to explore **seasonal patterns in equities and ETFs** using publicly available data from [Yahoo Finance](https://finance.yahoo.com/).
+**Stock Seasonality Analysis** is a research-focused Python project designed to explore **seasonal patterns in equities and ETFs** using publicly available data from [Yahoo Finance](https://finance.yahoo.com/). A large body of evidence showing the **limits of predictability in financial markets** exists, including **The Efficient Market Hypothesis (EMH)** where it's claimed that asset prices always reflect all available information, making it impossible to consistently outperform the market or even predict it to consistently have extraordinary benefits given that any information that could serve as an advantage is already reflected in the price. Under EMH no accurate prediction is guarenteed, but we could try to understand statistical tendencies (e.g. stronger returns in certain months or quarters) that can be useful for timing or risk management. These patterns are more likely to hold in markets influenced by cyclical demand, earnings seasons, or behavioral trends, though they can still break down due to external shocks or changing conditions. In essence, this project doesn't aim to predict the stock market but model seasonality in some of the chosen tickers.
 
-There’s a large body of evidence showing the **limits of predictability in financial markets**, including:
-
--   The **Efficient Market Hypothesis (EMH)**
-
--   [_The Adaptive Markets Hypothesis_ (Lo, 2004)](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4283395/)
-
--   Studies demonstrating that most professional fund managers fail to consistently outperform benchmarks.
-
-The aim is to:
--   Load, clean, and visualize historical data for a variety of tickers
-
--   Spot **recurring seasonal trends** — such as monthly, quarterly, or annual behaviors
-
--   Support **curiosity-driven exploration** across a broad universe of stocks, including unfamiliar tickers
-- Understanding **structure and historical behavior**, not forecasting the future
-
--  Building **testable, modular functions** and a simple codebase with robust tooling
 
 <!-- GETTING STARTED -->
 ## Getting Started
@@ -74,31 +57,30 @@ To set up your environment reliably, we recommend the following:
 
 -   **Python 3.11+** (managed via [`pyenv`](https://github.com/pyenv/pyenv))
 
--   [`uv`](https://github.com/astral-sh/uv) (fast Python package manager. Please do not use Conda; everytime anyone uses it a kitty dies)
+-   **Python package manager**[`uv`](https://github.com/astral-sh/uv)
 
--   [`pre-commit`](https://pre-commit.com/) (for automated linting and cleaning)
-
--   [`JupyterLab`](https://jupyterlab.readthedocs.io/en/stable/) (already included via dependencies, recommended for dashboard visualizations in notebooks)
+-   **Automated linting and cleaning**[`pre-commit`](https://pre-commit.com/)
 
 ##### Install dependencies:
 On macOS:
 `brew install pyenv uv pre-commit`
 
-`uv` installation for Linux:
-`curl -LsSf https://astral.sh/uv/install.sh | sh`
-
 ### Installation
-##### 1. Clone the repo
+##### 1. Clone the repo and access its folder
 `git clone https://github.com/DanielSFlamarich/stock-seasonality.git`
+
 `cd stock-seasonality`
 
 ##### 2. **Install Python version** (if not already):
 `pyenv install 3.11.9`
+
 `pyenv local 3.11.9`
 
 ##### 3. Set up virtual environment
 `uv venv`
+
 `source .venv/bin/activate`
+
 `uv pip sync requirements.lock`
 >This will install all the pinned dependencies exactly as specified, ensuring reproducibility across environments.
 
