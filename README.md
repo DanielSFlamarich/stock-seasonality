@@ -2,7 +2,7 @@
 <br />
 <div align="center">
   <a href="https://github.com/DanielSFlamarich/stock-seasonality">
-    <img src="data/external/img/some_logo_or_image.png" alt="Logo" width="80" height="80">
+    <img src="data/external/img/ds_logo.png" alt="Logo" width="80" height="80">
   </a>
 
 <h3 align="center">Stock Seasonality Analysis</h3>
