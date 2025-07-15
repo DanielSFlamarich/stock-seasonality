@@ -4,16 +4,16 @@ import shutil
 from pathlib import Path
 
 """
-Clears the local data cache for downloaded stock data.
+Clears the local pipeline cache for downloaded stock pipeline.
 
 This script is intended to run as part of the pre-commit hooks. It deletes
-the contents of the data/.cache directory to ensure that cached data does not
+the contents of the pipeline/.cache directory to ensure that cached pipeline does not
 persist between commits in notebooks or analysis scripts.
 
 Only the .cache directory is ever removed as a safety measure.
 """
 
-cache_dir = Path("data/.cache")
+cache_dir = Path("pipeline/.cache")
 
 if cache_dir.exists():
     if cache_dir.is_dir():

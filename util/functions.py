@@ -84,7 +84,7 @@ def calculate_anomalies(df, alpha):
     Create anomaly signals and aggregate them using heuristic weights.
 
     Args:
-        df (pd.DataFrame): Source data.
+        df (pd.DataFrame): Source pipeline.
         alpha (float): EMA smoothing factor.
 
     Returns:
@@ -140,7 +140,7 @@ def calculate_flow(df, alpha):
     Calculate smoothed flow categories based on completed volume.
 
     Args:
-        df (pd.DataFrame): Source data.
+        df (pd.DataFrame): Source pipeline.
         alpha (float): EMA smoothing factor.
 
     Returns:
@@ -173,7 +173,7 @@ def linear_combination(df, metric1, metric2, w1, w2):
     Linearly combine two metrics and normalize the result.
 
     Args:
-        df (pd.DataFrame): Input data.
+        df (pd.DataFrame): Input pipeline.
         metric1 (str): First metric column name.
         metric2 (str): Second metric column name.
         w1 (float): Weight for metric1.
