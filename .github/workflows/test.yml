@@ -1,23 +1,41 @@
 name: Run Tests
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [development]
+  pull_request:
+    branches: [development]
 
 jobs:
   test:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Install uv
-      run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      - name: Install uv
+        run: pip install uv
 
-    - name: Install project dependencies from lockfile
-      run: uv pip install -r requirements.lock
+      - name: Cache uv virtualenv
+        uses: actions/cache@v3
+        with:
+          path: |
+            .venv
+            ~/.cache/uv
+          key: ${{ runner.os }}-uv-${{ hashFiles('requirements.lock') }}
 
-    - name: Run pre-commit hooks
-      run: pre-commit run --all-files --show-diff-on-failure
+      - name: Create virtual environment with uv
+        run: uv venv
 
-    - name: Run pytest
-      run: pytest --maxfail=1 --disable-warnings -q
+      - name: Add .venv to PATH
+        run: echo "$(pwd)/.venv/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies from lockfile
+        run: uv pip install -r requirements.lock
+
+      - name: Run pre-commit hooks
+        run: pre-commit run --all-files --show-diff-on-failure
+
+      - name: Run pytest
+        run: pytest --maxfail=1 --disable-warnings -q
