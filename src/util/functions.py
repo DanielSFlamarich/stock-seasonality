@@ -1,42 +1,8 @@
-from collections import Counter
-
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.stats
 import seaborn as sns
 from sklearn.preprocessing import MinMaxScaler
-
-
-def detect_outliers(df, n, features):
-    """
-    Detect observations with more than n outliers based on IQR logic.
-
-    Args:
-        df (pd.DataFrame): DataFrame to analyze.
-        n (int): Number of outlier features to consider an observation an outlier.
-        features (list): Columns to check for outliers.
-
-    Returns:
-        list: Indexes of rows with n or more outlier values.
-    """
-    outlier_indices = []
-
-    for col in features:
-        q_1 = np.percentile(df[col], 25)
-        q_3 = np.percentile(df[col], 75)
-        iqr = q_3 - q_1
-        outlier_step = 1.5 * iqr
-
-        outlier_list_col = df[
-            (df[col] < q_1 - outlier_step) | (df[col] > q_3 + outlier_step)
-        ].index
-
-        outlier_indices.extend(outlier_list_col)
-
-    outlier_indices = Counter(outlier_indices)
-    multiple_outliers = [k for k, v in outlier_indices.items() if v >= n]
-
-    return multiple_outliers
 
 
 def metric_characterisation(data, var, confidence):
