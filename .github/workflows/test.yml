@@ -1,0 +1,23 @@
+name: Run Tests
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Install uv
+      run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    - name: Install project dependencies from lockfile
+      run: uv pip install -r requirements.lock
+
+    - name: Run pre-commit hooks
+      run: pre-commit run --all-files --show-diff-on-failure
+
+    - name: Run pytest
+      run: pytest --maxfail=1 --disable-warnings -q
