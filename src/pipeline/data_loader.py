@@ -82,11 +82,11 @@ class DataLoader:
                     progress=False,
                 )
                 if df is not None and not df.empty:
-                    # fix: flatten multi-index columns like ('Close', 'AAPL') → 'Close'
-                    if isinstance(df.columns, pd.MultiIndex):
-                        df.columns = df.columns.map(
-                            lambda col: col[0] if isinstance(col, tuple) else col
-                        )
+                    # Flatten any nested tuples or multi-indexes defensively
+                    df.columns = [
+                        col[0] if isinstance(col, (tuple, list)) else col
+                        for col in df.columns
+                    ]
 
                     df = df.reset_index()
                     df["ticker"] = ticker
@@ -100,7 +100,8 @@ class DataLoader:
 
         df_all = pd.concat(all_dfs, ignore_index=True)
 
-        df_all.columns = [col.lower() for col in df_all.columns]
+        # Ensure all column names are strings before lowercasing
+        df_all.columns = [str(col).lower() for col in df_all.columns]
 
         if "date" in df_all.columns:
             df_all["date"] = pd.to_datetime(df_all["date"])
