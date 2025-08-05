@@ -113,7 +113,8 @@ To validate our seasonality detection metrics, we generate in `notebooks/01_synt
 The synthetic closing price \( C_t \) is generated as:
 
 
-$C_t = C_0\underbrace{\beta t}_{\text{linear trend}}\underbrace{A_y \sin\left(\frac{2\pi t}{P_y}\right)}_{\text{yearly seasonality}}\underbrace{A_m \sin\left(\frac{2\pi t}{P_m}\right)}_{\text{monthly seasonality}}\underbrace{A_w \sin\left(\frac{2\pi t}{P_w}\right)}_{\text{weekly seasonality}}\underbrace{\epsilon_t}_{\text{Gaussian noise}}$
+$$C_t = C_0 + \underbrace{\beta t}_{\text{linear trend}} + \underbrace{A_y \sin\left(\frac{2\pi t}{P_y}\right)}_{\text{yearly seasonality}} + \underbrace{A_m \sin\left(\frac{2\pi t}{P_m}\right)}_{\text{monthly seasonality}} + \underbrace{A_w \sin\left(\frac{2\pi t}{P_w}\right)}_{\text{weekly seasonality}} + \underbrace{\epsilon_t}_{\text{Gaussian noise}}$$
+
 
 Where:
 - $( C_0 )$ — Base price (set to 100)
