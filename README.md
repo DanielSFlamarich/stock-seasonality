@@ -2,7 +2,7 @@
 <br />
 <div align="center">
   <a href="https://github.com/DanielSFlamarich/stock-seasonality">
-    <img src="data/external/img/ds_logo.png" alt="Logo" width="80" height="80">
+    <img src="references/img/ds_logo.png" alt="Logo" width="80" height="80">
   </a>
 
 <h3 align="center">Stock Seasonality Analysis</h3>
@@ -110,15 +110,11 @@ To validate our seasonality detection metrics, we generate in `notebooks/01_synt
 
 ##### 2. Synthetic Data Formula
 
-The synthetic closing price \( C_t \) is generated as:
+The synthetic closing price ( $C_t$ ) is generated as:
 
 
-$C_t = C_0
-    + \underbrace{\beta t}_{\text{linear trend}}
-    + \underbrace{A_y \sin\left(\frac{2\pi t}{P_y}\right)}_{\text{yearly seasonality}}
-    + \underbrace{A_m \sin\left(\frac{2\pi t}{P_m}\right)}_{\text{monthly seasonality}}
-    + \underbrace{A_w \sin\left(\frac{2\pi t}{P_w}\right)}_{\text{weekly seasonality}}
-    + \underbrace{\epsilon_t}_{\text{Gaussian noise}}$
+![Synthetic Data](references/img/synth_data_eq.png)
+
 
 Where:
 - $( C_0 )$ — Base price (set to 100)
@@ -139,7 +135,7 @@ The plot below overlays:
 - Blue line — Autocorrelation value (acf_lag_val) at seasonal lags
 - Red dotted line — Synthetic daily closing prices
 
-![ACF Proof of Concept](data/external/img/monthly_synth_ticker.png)
+![ACF Proof of Concept](references/img/monthly_synth_ticker.png)
 
 Interpretation
 - Strong periodic peaks in the autocorrelation confirm the presence of recurrent seasonal patterns.
