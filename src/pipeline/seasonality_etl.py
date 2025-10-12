@@ -1,29 +1,54 @@
+# src/pipeline/seasonality_etl.py (UPDATED)
 import logging
 from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 from scipy.signal import periodogram
-from sklearn.preprocessing import MinMaxScaler
 from statsmodels.tsa.seasonal import STL
 from statsmodels.tsa.stattools import acf
 
+from src.scoring.meta_scores import add_meta_scores, normalize_metrics_by_group
+
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 
 
 class SeasonalityETL:
     """
     ETL class to compute seasonality metrics from time series financial data.
-    Supports both full-series analysis (fit) and rolling-window time evolution
-    (fit_rolling).
-    TODO: once ready, this should store cleaned up data into db as parquet
+
+    Supports:
+    - Full-series analysis (fit)
+    - Rolling-window time evolution (fit_rolling)
+
+    Metrics:
+    --------
+    - ACF (Auto-correlation at seasonal lag)
+        + "Echo-score" where we compare the series to itself shifted one full season
+        + High value (close to 1): the patterns repeats reliably from
+          one period to the other.
+        + Low value (close to 0): little or no repeatability in the gap.
+        + Simple and intuitive, can be thrown off by trends or regime changes.
+    - P2M (Peak-to-mean ratio from periodogram)
+        + Checks frequency and asks; is there a stand out repeating rhythm?
+        + High value: (sharp peaks, signal >>> noise)
+        + Low value: (no peaks = noisy series)
+        + Good for crisp cycles, sensitive to short stories or heavy noise
+    - STL (Seasonal strength from STL decomposition)
+        + Split into trend + seasonal + remainder (noise) and measure how
+          much of the variation is explained by the seasonal part
+        + High value: most var is systematic and seasonal (patter explains data well)
+        + Low value: randomness or noise dominate
+        + Robust to trend, needs good volume of data to fit properly
+
+    Meta-scores:
+    ------------
+    Linear, geometric, and harmonic combinations via src.scoring.meta_scores
     """
 
     def __init__(
         self,
         seasonal_lags: Optional[Dict[str, int]] = None,
-        score_weights: Optional[Dict[str, float]] = None,
         normalize: bool = True,
     ):
         """
@@ -31,13 +56,10 @@ class SeasonalityETL:
         -----------
         seasonal_lags : dict
             Expected seasonality period per interval (e.g. {"1d": 252, "1wk": 52})
-        score_weights : dict
-            Weights for composite score. Keys: "acf", "p2m", "stl"
         normalize : bool
             Whether to apply min-max normalization before scoring
         """
         self.seasonal_lags = seasonal_lags or {"1d": 252, "1wk": 52, "1mo": 12}
-        self.score_weights = score_weights or {"acf": 1 / 3, "p2m": 1 / 3, "stl": 1 / 3}
         self.normalize = normalize
 
         self.df_metrics = None
@@ -67,29 +89,10 @@ class SeasonalityETL:
             if len(series) < lag + 10:
                 continue
 
-            try:
-                acf_vals = acf(series, nlags=lag + 10, fft=True)
-                acf_lag_val = acf_vals[lag]
-            except ValueError as e:
-                logger.warning(f"ACF failed for {ticker}-{interval}: {e}")
-                acf_lag_val = np.nan
-
-            try:
-                freqs, power = periodogram(series)
-                p2m_val = np.max(power) / np.mean(power) if np.mean(power) > 0 else 0
-            except ValueError as e:
-                logger.warning(f"Periodogram failed for {ticker}-{interval}: {e}")
-                p2m_val = np.nan
-
-            try:
-                stl = STL(series, period=lag, robust=True)
-                result = stl.fit()
-                resid_var = np.var(result.resid)
-                combined_var = np.var(result.seasonal + result.resid)
-                stl_strength = 1 - resid_var / combined_var if combined_var > 0 else 0
-            except ValueError as e:
-                logger.warning(f"STL failed for {ticker}-{interval}: {e}")
-                stl_strength = np.nan
+            # compute metrics using private methods for clarity
+            acf_lag_val = self._compute_acf(series, lag)
+            p2m_val = self._compute_p2m(series)
+            stl_strength = self._compute_stl_strength(series, lag)
 
             results.append(
                 {
@@ -102,7 +105,7 @@ class SeasonalityETL:
             )
 
         self.df_metrics = pd.DataFrame(results)
-        self._compute_scores()
+        self._compute_scores()  # still uses shared module internally
 
         if return_stage == "metrics":
             return self.get_metrics()
@@ -115,7 +118,7 @@ class SeasonalityETL:
     def fit_rolling(
         self,
         df: pd.DataFrame,
-        frequencies: List[str] = ["W", "M", "Q", "A"],
+        frequencies: List[str] = ["W", "ME", "QE", "YE"],
         min_obs_dict: Optional[Dict[str, int]] = None,
         normalize: Optional[bool] = None,
     ) -> pd.DataFrame:
@@ -127,26 +130,18 @@ class SeasonalityETL:
         df : DataFrame
             Must include: ["date", "close", "ticker", "interval"]
         frequencies : list of str
-            Window frequencies (e.g. 'W', 'M', 'Q', 'A')
+            Window frequencies (e.g. 'W', 'ME', 'QE', 'YE')
         min_obs_dict : dict
             Minimum number of observations per window per frequency
         normalize : bool
             Whether to normalize metrics per (interval, freq) before scoring
 
-        Notes:
-        ------
-        - '1d' is used solely as the base time resolution; we do NOT compute
-          seasonality *at* the '1d' level.
-        - The metrics (ACF, periodogram, STL) are calculated across time within each
-          resampled window (e.g., one score per week or month).
-
         Returns:
         --------
         DataFrame
-            Long-form metrics over time: includes ticker, interval, freq,
-            window_start, and scores.
+            Long-form metrics over time with meta-scores.
         """
-        min_obs_dict = min_obs_dict or {"W": 5, "M": 15, "Q": 40, "A": 200}
+        min_obs_dict = min_obs_dict or {"W": 5, "ME": 15, "QE": 40, "YE": 200}
         normalize = self.normalize if normalize is None else normalize
         results = []
 
@@ -168,43 +163,12 @@ class SeasonalityETL:
                     if len(series) < min_obs_dict.get(freq, 10):
                         continue
 
-                    try:
-                        acf_vals = acf(series, nlags=min(40, len(series) - 1), fft=True)
-                        acf_lag_val = acf_vals[1] if len(acf_vals) > 1 else np.nan
-                    except Exception as e:
-                        logger.warning(
-                            f"ACF failed for {ticker}-{interval} {freq} "
-                            f"{window_start}: {e}"
-                        )
-                        acf_lag_val = np.nan
-
-                    try:
-                        freqs_psd, power = periodogram(series)
-                        p2m_val = (
-                            np.max(power) / np.mean(power) if np.mean(power) > 0 else 0
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"Periodogram failed for {ticker}-{interval} "
-                            f"{freq} {window_start}: {e}"
-                        )
-                        p2m_val = np.nan
-
-                    try:
-                        period = self.seasonal_lags.get(interval, 12)
-                        stl = STL(series, period=period, robust=True)
-                        result = stl.fit()
-                        resid_var = np.var(result.resid)
-                        combined_var = np.var(result.seasonal + result.resid)
-                        stl_strength = (
-                            1 - resid_var / combined_var if combined_var > 0 else 0
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"STL failed for {ticker}-{interval} {freq} "
-                            f"{window_start}: {e}"
-                        )
-                        stl_strength = np.nan
+                    # use private methods for computation
+                    acf_lag_val = self._compute_acf(series, lag=1)
+                    p2m_val = self._compute_p2m(series)
+                    stl_strength = self._compute_stl_strength(
+                        series, period=self.seasonal_lags.get(interval, 12)
+                    )
 
                     results.append(
                         {
@@ -220,85 +184,111 @@ class SeasonalityETL:
 
         df_all = pd.DataFrame(results).dropna()
 
-        if normalize and not df_all.empty:
-            normed = []
-            for (interval, freq), group in df_all.groupby(["interval", "freq"]):
-                scaler = MinMaxScaler()
-                temp = group.copy()
-                try:
-                    temp[["acf_lag_val", "p2m_val", "stl_strength"]] = (
-                        scaler.fit_transform(
-                            temp[["acf_lag_val", "p2m_val", "stl_strength"]]
-                        )
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"MinMaxScaler failed for interval={interval}, freq={freq}: {e}"
-                    )
-                    continue
-                normed.append(temp)
-            df_all = pd.concat(normed, ignore_index=True)
+        # Early return if no windows survived filtering
+        if df_all.empty:
+            self.df_rolling = df_all
+            return df_all
 
-        df_all["seasonality_score_linear"] = (
-            self.score_weights["acf"] * df_all["acf_lag_val"]
-            + self.score_weights["p2m"] * df_all["p2m_val"]
-            + self.score_weights["stl"] * df_all["stl_strength"]
-        )
+        # use shared normalization and scoring
+        if normalize:
+            df_all = normalize_metrics_by_group(
+                df_all,
+                group_cols=["interval", "freq"],
+                metric_cols=["acf_lag_val", "p2m_val", "stl_strength"],
+            )
 
-        df_all["seasonality_score_geom"] = (
-            df_all["acf_lag_val"] * df_all["p2m_val"] * df_all["stl_strength"]
-        ) ** (1 / 3)
-
-        eps = 1e-6
-        vals = df_all[["acf_lag_val", "p2m_val", "stl_strength"]].clip(lower=eps)
-        df_all["seasonality_score_harmonic"] = 3 / (
-            1 / vals["acf_lag_val"] + 1 / vals["p2m_val"] + 1 / vals["stl_strength"]
-        )
+        # use shared meta-scoring (replaces duplicated logic)
+        df_all = add_meta_scores(df_all)
 
         self.df_rolling = df_all
         return df_all
 
+    # private methods for metric computation
+    def _compute_acf(self, series: pd.Series, lag: int) -> float:
+        """
+        Compute ACF at given lag with error handling.
+        """
+        try:
+            acf_vals = acf(series, nlags=min(lag + 10, len(series) - 1), fft=True)
+            return float(acf_vals[min(lag, len(acf_vals) - 1)])
+        except Exception as e:
+            logger.warning(f"ACF computation failed: {e}")
+            return np.nan
+
+    def _compute_p2m(self, series: pd.Series) -> float:
+        """
+        Compute peak-to-mean ratio from periodogram.
+        """
+        try:
+            _, power = periodogram(series)
+            mean_power = np.mean(power)
+            return float(np.max(power) / mean_power if mean_power > 0 else 0)
+        except Exception as e:
+            logger.warning(f"P2M computation failed: {e}")
+            return np.nan
+
+    def _compute_stl_strength(self, series: pd.Series, period: int) -> float:
+        """
+        Compute STL seasonal strength.
+        """
+        try:
+            stl = STL(series, period=period, robust=True)
+            result = stl.fit()
+            resid_var = np.var(result.resid)
+            combined_var = np.var(result.seasonal + result.resid)
+            return float(1 - resid_var / combined_var if combined_var > 0 else 0)
+        except Exception as e:
+            logger.warning(f"STL computation failed: {e}")
+            return np.nan
+
     def get_metrics(self) -> pd.DataFrame:
-        return self.df_metrics.copy()
+        """
+        Return raw metrics DataFrame.
+        """
+        return self.df_metrics.copy() if self.df_metrics is not None else None
 
     def get_normalized_metrics(self) -> pd.DataFrame:
-        return self.df_normalized.copy()
+        """
+        Return normalized metrics DataFrame.
+        """
+        return self.df_normalized.copy() if self.df_normalized is not None else None
 
     def get_scores(self) -> pd.DataFrame:
-        return self.df_scores.copy()
+        """
+        Return scored DataFrame.
+        """
+        return self.df_scores.copy() if self.df_scores is not None else None
 
     def get_rolling_scores(self) -> pd.DataFrame:
+        """
+        Return rolling window scores DataFrame.
+        """
         return self.df_rolling.copy() if self.df_rolling is not None else None
 
     def _compute_scores(self):
+        """
+        Internal method to compute scores from raw metrics.
+        Now uses shared meta_scores module to avoid duplication.
+        """
         df = self.df_metrics.dropna().copy()
 
+        # Early return if no data (prevents KeyError in normalize_metrics_by_group)
+        if df.empty:
+            self.df_normalized = pd.DataFrame()
+            self.df_scores = pd.DataFrame()
+            return
+
+        # Normalize per interval if requested
         if self.normalize:
-            normed = []
-            for interval, group in df.groupby("interval"):
-                scaler = MinMaxScaler()
-                temp = group.copy()
-                temp[["acf_lag_val", "p2m_val", "stl_strength"]] = scaler.fit_transform(
-                    temp[["acf_lag_val", "p2m_val", "stl_strength"]]
-                )
-                normed.append(temp)
-            df = pd.concat(normed)
+            df = normalize_metrics_by_group(
+                df,
+                group_cols=["interval"],
+                metric_cols=["acf_lag_val", "p2m_val", "stl_strength"],
+            )
+
         self.df_normalized = df.copy()
 
-        df["seasonality_score_linear"] = (
-            self.score_weights["acf"] * df["acf_lag_val"]
-            + self.score_weights["p2m"] * df["p2m_val"]
-            + self.score_weights["stl"] * df["stl_strength"]
-        )
-
-        df["seasonality_score_geom"] = (
-            df["acf_lag_val"] * df["p2m_val"] * df["stl_strength"]
-        ) ** (1 / 3)
-
-        eps = 1e-6
-        vals = df[["acf_lag_val", "p2m_val", "stl_strength"]].clip(lower=eps)
-        df["seasonality_score_harmonic"] = 3 / (
-            1 / vals["acf_lag_val"] + 1 / vals["p2m_val"] + 1 / vals["stl_strength"]
-        )
+        # Use shared scoring module
+        df = add_meta_scores(df)
 
         self.df_scores = df

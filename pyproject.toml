@@ -16,6 +16,11 @@ dependencies = [
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+markers = [
+    "unit: Fast tests with mocked dependencies",
+    "integration: Slower tests with real external APIs",
+    "slow: Very slow tests (>30 seconds)"
+]
 
 [tool.black]
 line-length = 88
@@ -30,6 +35,11 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+
+[dependency-groups]
+dev = [
+    "pytest-cov>=7.0.0",
+]
 
 [project.optional-dependencies]
 dev = ["ruff>=0.4.0"]
