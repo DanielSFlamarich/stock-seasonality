@@ -1,3 +1,11 @@
+# config/tickers_list.yaml
+
+# ── app settings ─────────────────────────────────────────────
+start_date: "2012-01-01"
+date_format: "%Y-%m-%d"
+long_process_refresh_seconds: 30
+
+# ── tickers ──────────────────────────────────────────────────
 tickers:
   - AAPL
   - MSFT

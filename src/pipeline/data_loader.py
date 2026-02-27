@@ -3,21 +3,49 @@
 import datetime as dt
 import hashlib
 import logging
+import time
+from itertools import product
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Union
 
 import pandas as pd
 import yaml
 import yfinance as yf
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+
+# constants
+MAX_RETRIES = 3
+INITIAL_BACKOFF_SECONDS = 2.0
+CACHE_MAX_AGE_DAYS = 7
+VALID_INTERVALS = {"1d", "1wk", "1mo", "5d", "1h", "5m", "15m", "30m", "60m", "90m"}
 
 
 class DataLoader:
     """
-    Class to handle downloading and caching historical financial data from yfinance.
-    Loads ticker configuration from a YAML file and manages local caching of data.
+    Handles downloading and caching historical financial data from yfinance.
+
+    Features:
+    - Exponential backoff retry on transient API failures
+    - YAML config validation
+    - Date and interval input validation
+    - Download statistics tracking
+    - Parameter-aware cache (different queries get different cache files)
+    - Cache with configurable max age
+
+    Parameters
+    ----------
+    config_path : str
+        Path to YAML config with 'tickers' key
+    use_cache : bool
+        Whether to use cached parquet data
+    verbose : bool
+        Enable progress bar and info logging
+    save_combined : bool
+        Whether to persist combined data to parquet
+    combined_cache_path : str or Path, optional
+        Override automatic cache path (bypasses parameter-aware naming)
     """
 
     def __init__(
@@ -25,169 +53,311 @@ class DataLoader:
         config_path: str = "config/tickers_list.yaml",
         use_cache: bool = True,
         verbose: bool = False,
+        save_combined: bool = True,
+        combined_cache_path: Optional[Union[str, Path]] = None,
     ):
-        """
-        Initialize the DataLoader.
+        # validate config path exists
+        config_file = Path(config_path)
+        if not config_file.exists():
+            raise FileNotFoundError(f"Config file not found: {config_path}")
+        if not config_file.is_file():
+            raise ValueError(f"Config path is not a file: {config_path}")
 
-        Parameters:
-        -----------
-        config_path : str
-            Path to the YAML file containing the list of tickers.
-        use_cache : bool
-            Whether to use cached files if available.
-        verbose : bool
-            Whether to print additional logging messages.
-        """
-        self.project_root = Path(__file__).resolve().parents[2]
-        self.config_path = self.project_root / config_path
+        self.config_path = config_path
         self.use_cache = use_cache
         self.verbose = verbose
-        self.cache_dir = self.project_root / "data" / ".cache"
+        self.save_combined = save_combined
+        self.stats: Dict[str, int] = {"success": 0, "failed": 0, "total": 0}
+
+        self.cache_dir = Path("data/.cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def load_config(self) -> List[str]:
+        # if explicitly provided, lock cache path; otherwise compute per-query in load()
+        self._cache_path_override = (
+            Path(combined_cache_path) if combined_cache_path else None
+        )
+        self.combined_cache_path: Optional[Path] = self._cache_path_override
+
+    def _log(self, msg: str) -> None:
+        if self.verbose:
+            logger.info(msg)
+
+    def _read_tickers(self) -> List[str]:
         """
-        Loads tickers from the YAML config file
+        Read and validate tickers from YAML config.
+
         Returns
         -------
-        List: str
-            List of ticker symbols
+        List[str]
+            Validated list of ticker symbols
+
+        Raises
+        ------
+        ValueError
+            If YAML schema is invalid or tickers list is empty
         """
         with open(self.config_path, "r") as f:
             config = yaml.safe_load(f)
-        return config.get("tickers", [])
 
-    def _get_cache_filename(
-        self, ticker: str, start: str, end: str, interval: str
+        if not isinstance(config, dict):
+            raise ValueError(f"Config must be a dict, got {type(config)}")
+        if "tickers" not in config:
+            raise ValueError("Config must contain 'tickers' key")
+        if not isinstance(config["tickers"], list):
+            raise ValueError(f"'tickers' must be a list, got {type(config['tickers'])}")
+        if not all(isinstance(t, str) for t in config["tickers"]):
+            raise ValueError("All tickers must be strings")
+        if len(config["tickers"]) == 0:
+            raise ValueError("Tickers list cannot be empty")
+
+        return config["tickers"]
+
+    @staticmethod
+    def _validate_date(date_str: str) -> None:
+        """
+        Validate ISO date format (YYYY-MM-DD).
+        """
+        try:
+            dt.datetime.fromisoformat(date_str)
+        except ValueError:
+            raise ValueError(f"Invalid date format: '{date_str}'. Expected YYYY-MM-DD.")
+
+    @staticmethod
+    def _validate_intervals(intervals: List[str]) -> None:
+        """
+        Validate that all intervals are supported by yfinance.
+        """
+        invalid = set(intervals) - VALID_INTERVALS
+        if invalid:
+            raise ValueError(
+                f"Invalid intervals: {invalid}. Valid: {sorted(VALID_INTERVALS)}"
+            )
+
+    @staticmethod
+    def _compute_cache_hash(
+        tickers: List[str],
+        intervals: List[str],
+        start_date: str,
+        end_date: str,
+    ) -> str:
+        """
+        Compute a short hash for cache key based on query parameters.
+
+        Includes tickers, intervals, and date range so different queries
+        never collide. Order-independent for tickers and intervals.
+        """
+        key = (
+            "+".join(sorted(tickers))
+            + "|"
+            + "+".join(sorted(intervals))
+            + "|"
+            + start_date
+            + "|"
+            + end_date
+        )
+        return hashlib.md5(key.encode()).hexdigest()[:8]
+
+    def _build_cache_path(
+        self,
+        tickers: List[str],
+        intervals: List[str],
+        start_date: str,
+        end_date: str,
     ) -> Path:
         """
-        Generates a unique cache filename for a ticker based on input parameters
-        Parameters
-        ----------
-        ticker: str
-        start: str
-        end: str
-        interval: str
+        Build a cache filename that encodes the query parameters.
 
-        Returns
-        -------
-        Path to cached file
+        Format: all_data_{start}_{end}_{hash}.parquet
+        Example: all_data_2012-01-01_2023-01-01_a1b2c3d4.parquet
         """
-        id_str = f"{ticker}_{start}_{end}_{interval}"
-        hash_suffix = hashlib.md5(id_str.encode()).hexdigest()[:8]
-        filename = f"{ticker}_{hash_suffix}.parquet"
-        return self.cache_dir / filename
+        h = self._compute_cache_hash(tickers, intervals, start_date, end_date)
+        return self.cache_dir / f"all_data_{start_date}_{end_date}_{h}.parquet"
 
-    def _download_single_ticker(
-        self, ticker: str, start: str, end: str, interval: str
+    def _is_cache_fresh(self) -> bool:
+        """Check if cache file exists and is younger than CACHE_MAX_AGE_DAYS."""
+        if self.combined_cache_path is None or not self.combined_cache_path.exists():
+            return False
+        age = dt.datetime.now() - dt.datetime.fromtimestamp(
+            self.combined_cache_path.stat().st_mtime
+        )
+        return age.days < CACHE_MAX_AGE_DAYS
+
+    def _download_with_retry(
+        self,
+        ticker: str,
+        start_date: str,
+        end_date: str,
+        interval: str,
     ) -> Optional[pd.DataFrame]:
         """
-        Downloads data for a single ticker from yfinance with optional caching
+        Download ticker data with exponential backoff retry.
+
         Parameters
         ----------
-        ticker: str
-        start: str
-        end: str
-        interval: str
+        ticker : str
+            Ticker symbol (e.g., 'AAPL', 'SAP.DE')
+        start_date : str
+            Start date (YYYY-MM-DD)
+        end_date : str
+            End date (YYYY-MM-DD)
+        interval : str
+            Data interval (e.g., '1d', '1wk')
 
         Returns
         -------
         pd.DataFrame or None
-            Downloaded data or None if failed or empty
+            Raw OHLCV data, or None if all retries exhausted
         """
-        cache_path = self._get_cache_filename(ticker, start, end, interval)
+        for attempt in range(MAX_RETRIES):
+            try:
+                df = yf.download(
+                    ticker,
+                    start=start_date,
+                    end=end_date,
+                    interval=interval,
+                    auto_adjust=True,
+                    progress=False,
+                )
+                if df is not None and not df.empty:
+                    return df
 
-        if self.use_cache and cache_path.exists():
-            if self.verbose:
-                print(f"Loading from cache: {cache_path}")
-            return pd.read_parquet(cache_path)
+                # empty result --> retry (ticker may be temporarily unavailable)
+                logger.debug(
+                    f"Empty result for {ticker} [{interval}], "
+                    f"attempt {attempt + 1}/{MAX_RETRIES}"
+                )
 
-        try:
-            df = yf.download(
-                tickers=ticker,
-                start=start,
-                end=end,
-                interval=interval,
-                group_by="ticker",
-                auto_adjust=True,
-                progress=False,
-                threads=True,
-            )
-        except Exception as e:
-            logger.warning(f"Download failed for {ticker}: {e}")
-            return None
+            except Exception as e:
+                logger.warning(
+                    f"Download failed for {ticker} [{interval}], "
+                    f"attempt {attempt + 1}/{MAX_RETRIES}: {e}"
+                )
 
-        if df.empty:
-            logger.warning(f"No data returned for {ticker}")
-            return None
+            # exponential backoff (skip sleep on last attempt)
+            if attempt < MAX_RETRIES - 1:
+                wait = INITIAL_BACKOFF_SECONDS * (2**attempt)
+                logger.debug(f"Retrying {ticker} in {wait:.1f}s...")
+                time.sleep(wait)
 
-        if isinstance(df.columns, pd.MultiIndex):
-            df = (
-                df.stack(level=0, future_stack=True)
-                .rename_axis(["date", "ticker"])
-                .reset_index()
-            )
-        else:
-            df["ticker"] = ticker
-            df = df.reset_index()
-
-        df.columns = df.columns.str.lower()
-        df["interval"] = interval
-
-        try:
-            df.to_parquet(cache_path, index=False)
-            if self.verbose:
-                print(f"Saved to cache: {cache_path}")
-        except Exception as e:
-            logger.warning(f"Failed to save cache for {ticker}: {e}")
-
-        return df
+        logger.warning(f"All {MAX_RETRIES} attempts failed for {ticker} [{interval}]")
+        return None
 
     def load(
         self,
-        start_date: str = "2022-01-01",
+        start_date: str,
         end_date: Optional[str] = None,
         intervals: Optional[List[str]] = None,
     ) -> pd.DataFrame:
         """
-        Loads data for all tickers across specified intervals
+        Load historical data for all configured tickers.
+
+        Downloads from yfinance (with retry) or returns cached data.
+        Cache files are keyed by (tickers, intervals, start_date, end_date)
+        so different queries never collide.
+
+        After completion, download statistics are available via self.stats.
+
         Parameters
         ----------
-        start_date: str
-            Start date for data download
-        end_date: str, optional
-            End data for data download
-        intervals: List[str], optional
-            List of time intervals (as in pandas' resample or group by method) to fetch
+        start_date : str
+            Start date in YYYY-MM-DD format
+        end_date : str, optional
+            End date (defaults to today)
+        intervals : List[str], optional
+            Data granularity (defaults to ['1d'])
 
         Returns
         -------
         pd.DataFrame
-            Concatenated data for all tickers and intervals
+            Combined OHLCV data with 'ticker' and 'interval' columns
+
+        Raises
+        ------
+        ValueError
+            If no data could be loaded for any ticker
         """
         if intervals is None:
-            intervals = ["1d", "1wk", "1mo"]
-        if end_date is None:
-            end_date = dt.datetime.today().strftime("%Y-%m-%d")
+            intervals = ["1d"]
 
-        tickers = self.load_config()
-        all_dfs = []
+        # Validate inputs
+        self._validate_date(start_date)
+        if end_date:
+            self._validate_date(end_date)
+        self._validate_intervals(intervals)
 
-        for ticker in tickers:
-            for interval in intervals:
-                if self.verbose:
-                    print(f"Loading {ticker} [{interval}]...")
-                df = self._download_single_ticker(
-                    ticker, start_date, end_date, interval
-                )
-                if df is not None and not df.empty:
-                    all_dfs.append(df)
+        # resolve end_date early so cache key is deterministic
+        end_date = end_date or dt.datetime.today().strftime("%Y-%m-%d")
 
-        if not all_dfs:
-            raise ValueError(
-                "No data could be loaded for the given tickers and intervals."
+        # read tickers for cache key computation
+        tickers = self._read_tickers()
+
+        # build parameter-aware cache path (unless overridden in __init__)
+        if self._cache_path_override is None:
+            self.combined_cache_path = self._build_cache_path(
+                tickers, intervals, start_date, end_date
             )
 
-        df_all = pd.concat(all_dfs).reset_index(drop=True)
-        df_all["date"] = pd.to_datetime(df_all["date"])
+        # check cache
+        if self.use_cache and self._is_cache_fresh():
+            self._log(f"Loading cached data from {self.combined_cache_path}")
+            return pd.read_parquet(self.combined_cache_path)
+
+        all_dfs: List[pd.DataFrame] = []
+
+        # reset stats
+        pairs = list(product(tickers, intervals))
+        self.stats = {"success": 0, "failed": 0, "total": len(pairs)}
+
+        for ticker, interval in tqdm(
+            pairs, desc="Downloading data", disable=not self.verbose
+        ):
+            df = self._download_with_retry(ticker, start_date, end_date, interval)
+
+            if df is not None and not df.empty:
+                # flatten any nested tuples or multi-indexes defensively
+                df.columns = [
+                    col[0] if isinstance(col, (tuple, list)) else col
+                    for col in df.columns
+                ]
+                df = df.reset_index()
+                df["ticker"] = ticker
+                df["interval"] = interval
+                all_dfs.append(df)
+                self.stats["success"] += 1
+            else:
+                self.stats["failed"] += 1
+
+        # report statistics
+        success_rate = (
+            100 * self.stats["success"] / self.stats["total"]
+            if self.stats["total"] > 0
+            else 0
+        )
+        self._log(
+            f"Download complete: {self.stats['success']}/{self.stats['total']} "
+            f"({success_rate:.0f}% success)"
+        )
+        if success_rate < 50:
+            logger.warning(
+                f"Low success rate: {success_rate:.0f}%. "
+                f"Check network or ticker validity."
+            )
+
+        if not all_dfs:
+            raise ValueError("No data could be loaded for any ticker or interval.")
+
+        df_all = pd.concat(all_dfs, ignore_index=True)
+
+        # ensure all column names are strings before lower casing
+        df_all.columns = [str(col).lower() for col in df_all.columns]
+
+        if "date" in df_all.columns:
+            df_all["date"] = pd.to_datetime(df_all["date"])
+        else:
+            raise ValueError("Expected column 'date' not found after standardization.")
+
+        if self.save_combined:
+            df_all.to_parquet(self.combined_cache_path)
+            self._log(f"Saved combined data to {self.combined_cache_path}")
+
         return df_all

@@ -18,6 +18,12 @@ coverage.xml
 .tox/
 .junit.xml
 
+# Testing caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+
 # Virtual environments
 .venv/
 env/
@@ -25,6 +31,7 @@ ENV/
 venv/
 env.bak/
 *.env
+.v/
 
 # Poetry-specific virtualenv
 .poetry/
@@ -97,6 +104,13 @@ wandb/latest-run/
 
 # Spyder
 .spyproject/
+
+# =============== macOS ===============
+.DS_Store
+**/.DS_Store
+.AppleDouble
+.LSOverride
+._*
 
 # =============== BUILD ARTIFACTS ===============
 build/

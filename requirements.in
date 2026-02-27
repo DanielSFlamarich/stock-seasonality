@@ -20,3 +20,9 @@ seaborn
 datetime
 redshift_connector
 notebook
+mlflow
+pytest
+ipywidgets
+plotly
+pre-commit
+ruff
