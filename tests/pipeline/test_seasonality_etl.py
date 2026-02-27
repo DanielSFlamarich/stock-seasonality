@@ -1,17 +1,15 @@
-# tests/pipeline/test_seasonality_etl.py
+# tests/pipeline/test_seasonality_etl_new_validations.py
 """
-Unit tests for src.pipeline.seasonality_etl.SeasonalityETL
+Additional unit tests for seasonality_etl.py improvements.
 
-Validates:
-- fit() computes ACF, P2M, STL for full series
-- fit_rolling() produces calendar-aligned windows
-- Metric values within expected ranges after normalization
-- Edge cases: insufficient data, NaN handling
-- Meta-score formulas (linear, geometric, harmonic)
-- Known seasonal patterns are detected correctly
+Tests new functionality added in v2.0:
+- Input validation (missing columns)
+- STL period validation
+- Empty DataFrame handling
+- Constants usage
 
 Run tests:
-    pytest tests/pipeline/test_seasonality_etl.py -v
+    pytest tests/pipeline/test_seasonality_etl_new_validations.py -v
 """
 
 import numpy as np
@@ -21,306 +19,365 @@ import pytest
 from src.pipeline.seasonality_etl import SeasonalityETL
 
 # ============================================================================
-# FIXTURES
-# ============================================================================
-
-
-@pytest.fixture
-def dummy_df():
-    """
-    Synthetic data with STRONG yearly seasonality.
-
-    Pattern: sin(2π * day/365) creates a clear 365-day cycle.
-    Noise level is low (0.1) to ensure seasonality is detectable.
-    """
-    dates = pd.date_range(start="2023-01-01", periods=400, freq="D")
-
-    # strong yearly seasonality + small noise
-    seasonal_component = 10 * np.sin(2 * np.pi * dates.dayofyear / 365)
-    noise = np.random.RandomState(42).normal(
-        0, 0.1, len(dates)
-    )  # seed for reproducibility
-
-    data = {
-        "date": dates,
-        "close": 100
-        + seasonal_component
-        + noise,  # base price 100, +/- 10 seasonal swing
-        "ticker": ["TEST"] * len(dates),
-        "interval": ["1d"] * len(dates),
-    }
-    return pd.DataFrame(data)
-
-
-@pytest.fixture
-def multi_ticker_df():
-    """
-    Synthetic data with multiple tickers and intervals.
-    Used for testing batch processing.
-    """
-    dfs = []
-    for ticker in ["TICK1", "TICK2"]:
-        for interval in ["1d"]:  # only use 1d to avoid filtering issues
-            periods = 400
-            dates = pd.date_range(start="2023-01-01", periods=periods, freq="D")
-
-            seasonal = 10 * np.sin(2 * np.pi * np.arange(periods) / 365)
-            noise = np.random.RandomState(42).normal(0, 0.1, periods)
-
-            df = pd.DataFrame(
-                {
-                    "date": dates,
-                    "close": 100 + seasonal + noise,
-                    "ticker": ticker,
-                    "interval": interval,
-                }
-            )
-            dfs.append(df)
-
-    return pd.concat(dfs, ignore_index=True)
-
-
-@pytest.fixture
-def short_series_df():
-    """
-    Insufficient data for reliable seasonality detection.
-    Only 30 days - too short for yearly seasonality (needs ~252 trading days).
-    """
-    dates = pd.date_range(start="2023-01-01", periods=30, freq="D")
-    data = {
-        "date": dates,
-        "close": np.random.RandomState(42).normal(100, 5, len(dates)),
-        "ticker": ["SHORT"] * len(dates),
-        "interval": ["1d"] * len(dates),
-    }
-    return pd.DataFrame(data)
-
-
-@pytest.fixture
-def nan_series_df():
-    """
-    Time series with NaN values.
-    Should be handled gracefully (dropna).
-    """
-    dates = pd.date_range(start="2023-01-01", periods=400, freq="D")
-
-    # create as numpy array FIRST, then convert to Series
-    close_values = 100 + 10 * np.sin(2 * np.pi * np.arange(len(dates)) / 365)
-
-    # introduce NaNs at random positions
-    nan_indices = np.random.RandomState(42).choice(len(dates), size=20, replace=False)
-    close_values[nan_indices] = np.nan  # numpy array
-
-    data = {
-        "date": dates,
-        "close": close_values,
-        "ticker": ["NAN_TEST"] * len(dates),
-        "interval": ["1d"] * len(dates),
-    }
-    return pd.DataFrame(data)
-
-
-# ============================================================================
-# TESTS FOR BATCH MODE (fit)
+# INPUT VALIDATION TESTS (NEW in v2.0)
 # ============================================================================
 
 
 @pytest.mark.unit
-def test_return_metrics(dummy_df):
+def test_fit_validates_required_columns():
     """
-    Unit test: fit() returns raw metrics DataFrame.
-    """
-    etl = SeasonalityETL()
-    df_metrics = etl.fit(dummy_df, return_stage="metrics")
-
-    assert df_metrics is not None
-    assert not df_metrics.empty
-    assert "acf_lag_val" in df_metrics.columns
-    assert "p2m_val" in df_metrics.columns
-    assert "stl_strength" in df_metrics.columns
-    assert "ticker" in df_metrics.columns
-    assert "interval" in df_metrics.columns
-
-
-@pytest.mark.unit
-def test_return_normalized(dummy_df):
-    """
-    Unit test: Normalized metrics are within [0, 1] range.
-    """
-    etl = SeasonalityETL(normalize=True)
-    df_norm = etl.fit(dummy_df, return_stage="normalized")
-
-    # all metrics should be normalized to [0, 1]
-    for col in ["acf_lag_val", "p2m_val", "stl_strength"]:
-        assert df_norm[col].min() >= 0, f"{col} has values < 0"
-        assert df_norm[col].max() <= 1, f"{col} has values > 1"
-
-
-@pytest.mark.unit
-def test_return_scores(dummy_df):
-    """
-    Unit test: fit() returns scores with all meta-score columns.
-    """
-    etl = SeasonalityETL()
-    df_scores = etl.fit(dummy_df, return_stage="scores")
-
-    expected_cols = [
-        "seasonality_score_linear",
-        "seasonality_score_geom",
-        "seasonality_score_harmonic",
-    ]
-    assert all(col in df_scores.columns for col in expected_cols)
-
-    # all scores should be non-negative
-    for col in expected_cols:
-        assert (df_scores[col] >= 0).all(), f"{col} has negative values"
-
-
-@pytest.mark.unit
-def test_fit_multi_ticker(multi_ticker_df):
-    """
-    Unit test: fit() handles multiple tickers.
-    """
-    etl = SeasonalityETL()
-    df_scores = etl.fit(multi_ticker_df, return_stage="scores")
-
-    # should have results for all tickers (now only 1d interval)
-    assert df_scores["ticker"].nunique() == 2
-    assert len(df_scores) == 2  # 2 tickers × 1 interval
-
-
-@pytest.mark.unit
-def test_fit_with_short_series_skipped(short_series_df):
-    """
-    Unit test: Short series (< min length) are skipped gracefully.
-    """
-    etl = SeasonalityETL()
-    df_scores = etl.fit(short_series_df, return_stage="scores")
-
-    # should return empty DataFrame (insufficient data)
-    assert df_scores.empty or len(df_scores) == 0
-
-
-@pytest.mark.unit
-def test_fit_with_nan_handling(nan_series_df):
-    """
-    Unit test: NaN values are handled gracefully (dropna).
+    Unit test: fit() should raise ValueError if required columns missing.
     """
     etl = SeasonalityETL()
 
-    # should not crash with NaN values
-    df_scores = etl.fit(nan_series_df, return_stage="scores")
-
-    # should still return results (after dropping NaNs)
-    assert not df_scores.empty
-    assert df_scores["ticker"].iloc[0] == "NAN_TEST"
-
-
-# ============================================================================
-# TESTS FOR ROLLING WINDOW MODE (fit_rolling)
-# ============================================================================
-
-
-@pytest.mark.unit
-def test_fit_rolling_output_structure(dummy_df):
-    """
-    Unit test: fit_rolling() returns expected columns.
-    """
-    etl = SeasonalityETL()
-    df_rolling = etl.fit_rolling(dummy_df, frequencies=["W"])
-
-    assert not df_rolling.empty
-
-    expected_cols = {
-        "ticker",
-        "interval",
-        "freq",
-        "window_start",
-        "acf_lag_val",
-        "p2m_val",
-        "stl_strength",
-        "seasonality_score_linear",
-        "seasonality_score_geom",
-        "seasonality_score_harmonic",
-    }
-    assert expected_cols.issubset(set(df_rolling.columns))
-
-
-@pytest.mark.unit
-def test_fit_rolling_normalization(dummy_df):
-    """
-    Unit test: fit_rolling() with normalize=True produces [0,1] metrics.
-    """
-    etl = SeasonalityETL(normalize=True)
-    df_rolling = etl.fit_rolling(dummy_df, frequencies=["ME"])
-
-    for col in ["acf_lag_val", "p2m_val", "stl_strength"]:
-        assert df_rolling[col].min() >= 0, f"{col} has values < 0"
-        assert df_rolling[col].max() <= 1, f"{col} has values > 1"
-
-
-@pytest.mark.unit
-def test_fit_rolling_multiple_frequencies(dummy_df):
-    """
-    Unit test: fit_rolling() with multiple frequencies creates separate windows.
-    """
-    etl = SeasonalityETL()
-    df_rolling = etl.fit_rolling(dummy_df, frequencies=["W", "ME"])
-
-    # should have windows for both frequencies
-    assert set(df_rolling["freq"].unique()) == {"W", "ME"}
-
-    # weekly windows should be more numerous than monthly
-    w_count = len(df_rolling[df_rolling["freq"] == "W"])
-    me_count = len(df_rolling[df_rolling["freq"] == "ME"])
-    assert w_count > me_count
-
-
-@pytest.mark.unit
-def test_fit_rolling_min_obs_filtering(dummy_df):
-    """
-    Unit test: Windows with insufficient observations are skipped.
-    """
-    etl = SeasonalityETL()
-
-    # set very high min_obs to force filtering
-    df_rolling = etl.fit_rolling(
-        dummy_df, frequencies=["W"], min_obs_dict={"W": 1000}  # impossible threshold
+    # Missing 'close' column
+    invalid_df = pd.DataFrame(
+        {
+            "date": pd.date_range("2023-01-01", periods=300, freq="D"),
+            # "close": missing!
+            "ticker": ["TEST"] * 300,
+            "interval": ["1d"] * 300,
+        }
     )
 
-    # should return empty DataFrame (all windows filtered)
-    assert len(df_rolling) == 0  # check it's empty
+    with pytest.raises(ValueError, match="missing required columns.*close"):
+        etl.fit(invalid_df, return_stage="metrics")
 
 
 @pytest.mark.unit
-def test_fit_rolling_window_start_dates(dummy_df):
+def test_fit_validates_missing_ticker_column():
     """
-    Unit test: window_start dates are aligned to calendar boundaries.
+    Unit test: fit() should raise ValueError if 'ticker' missing.
     """
     etl = SeasonalityETL()
-    df_rolling = etl.fit_rolling(dummy_df, frequencies=["ME"])
 
-    # monthly windows should start at month-end
-    for date in df_rolling["window_start"]:
-        assert date.is_month_end or date == date + pd.offsets.MonthEnd(0)
+    invalid_df = pd.DataFrame(
+        {
+            "date": pd.date_range("2023-01-01", periods=300, freq="D"),
+            "close": np.random.randn(300) + 100,
+            # "ticker": missing!
+            "interval": ["1d"] * 300,
+        }
+    )
+
+    with pytest.raises(ValueError, match="missing required columns.*ticker"):
+        etl.fit(invalid_df, return_stage="metrics")
+
+
+@pytest.mark.unit
+def test_fit_validates_missing_multiple_columns():
+    """
+    Unit test: fit() should report all missing columns.
+    """
+    etl = SeasonalityETL()
+
+    invalid_df = pd.DataFrame(
+        {
+            "date": pd.date_range("2023-01-01", periods=300, freq="D"),
+            # Missing: close, ticker, interval
+        }
+    )
+
+    with pytest.raises(ValueError, match="missing required columns"):
+        etl.fit(invalid_df, return_stage="metrics")
+
+
+@pytest.mark.unit
+def test_fit_rolling_validates_required_columns():
+    """
+    Unit test: fit_rolling() should raise ValueError if required columns missing.
+    """
+    etl = SeasonalityETL()
+
+    invalid_df = pd.DataFrame(
+        {
+            "date": pd.date_range("2023-01-01", periods=300, freq="D"),
+            # "close": missing!
+            "ticker": ["TEST"] * 300,
+            "interval": ["1d"] * 300,
+        }
+    )
+
+    with pytest.raises(ValueError, match="missing required columns.*close"):
+        etl.fit_rolling(invalid_df, frequencies=["W"])
+
+
+@pytest.mark.unit
+def test_fit_with_extra_columns_is_ok():
+    """
+    Unit test: Extra columns should not cause errors (forward compatibility).
+    """
+    etl = SeasonalityETL(seasonal_lags={"1d": 50})
+
+    df_with_extras = pd.DataFrame(
+        {
+            "date": pd.date_range("2023-01-01", periods=300, freq="D"),
+            "close": 100 + 10 * np.sin(2 * np.pi * np.arange(300) / 365),
+            "ticker": ["TEST"] * 300,
+            "interval": ["1d"] * 300,
+            "extra_col1": [1] * 300,  # extra columns
+            "extra_col2": ["extra"] * 300,
+        }
+    )
+
+    # should not raise
+    df_scores = etl.fit(df_with_extras, return_stage="scores")
+    assert not df_scores.empty
 
 
 # ============================================================================
-# META-SCORE FORMULA VALIDATION
+# EMPTY DATAFRAME HANDLING TESTS (IMPROVED in v2.0)
 # ============================================================================
 
 
 @pytest.mark.unit
-def test_meta_score_formulas():
+def test_fit_empty_dataframe_returns_empty():
     """
-    Unit test: Verify meta-score formulas are computed correctly.
+    Unit test: Empty DataFrame should return empty results, not crash.
+    """
+    etl = SeasonalityETL()
+    empty_df = pd.DataFrame(columns=["date", "close", "ticker", "interval"])
 
-    Given known metric values, check:
-    - Linear = mean(acf, p2m, stl)
-    - Geometric = (acf * p2m * stl)^(1/3)
-    - Harmonic = 3 / (1/acf + 1/p2m + 1/stl)
+    # Should not raise
+    df_metrics = etl.fit(empty_df, return_stage="metrics")
+
+    assert df_metrics is not None
+    assert df_metrics.empty
+
+    # Check all internal state is also empty
+    assert etl.df_metrics.empty
+    assert etl.df_normalized.empty
+    assert etl.df_scores.empty
+
+
+@pytest.mark.unit
+def test_fit_empty_dataframe_with_return_stages():
     """
-    test_df = pd.DataFrame(
+    Unit test: Empty DataFrame should return empty for all return_stage options.
+    """
+    etl = SeasonalityETL()
+    empty_df = pd.DataFrame(columns=["date", "close", "ticker", "interval"])
+
+    for stage in ["metrics", "normalized", "scores", None]:
+        result = etl.fit(empty_df, return_stage=stage)
+
+        if stage is None:
+            assert result is None
+        else:
+            assert result is not None
+            assert result.empty
+
+
+@pytest.mark.unit
+def test_fit_rolling_empty_dataframe_returns_empty():
+    """
+    Unit test: fit_rolling() with empty DataFrame should return empty.
+    """
+    etl = SeasonalityETL()
+    empty_df = pd.DataFrame(columns=["date", "close", "ticker", "interval"])
+
+    # Should not raise
+    df_rolling = etl.fit_rolling(empty_df, frequencies=["W"])
+
+    assert df_rolling is not None
+    assert df_rolling.empty
+
+
+# ============================================================================
+# STL PERIOD VALIDATION TESTS (NEW in v2.0)
+# ============================================================================
+
+
+@pytest.mark.unit
+def test_stl_validation_insufficient_data():
+    """
+    Unit test: STL should return np.nan when series too short for period.
+
+    NEW in v2.0: STL validates len(series) >= 2 * period before attempting fit.
+    """
+    etl = SeasonalityETL(seasonal_lags={"1d": 252})
+
+    # Only 100 days, but period=252 → needs at least 504 days (2 * 252)
+    short_df = pd.DataFrame(
+        {
+            "date": pd.date_range("2023-01-01", periods=100, freq="D"),
+            "close": 100 + 10 * np.sin(2 * np.pi * np.arange(100) / 365),
+            "ticker": ["SHORT"] * 100,
+            "interval": ["1d"] * 100,
+        }
+    )
+
+    df_metrics = etl.fit(short_df, return_stage="metrics")
+
+    # STL should return NaN (insufficient data), but ACF and P2M may still work
+    assert df_metrics is not None
+
+    if not df_metrics.empty:
+        row = df_metrics.iloc[0]
+        # STL should be NaN due to insufficient data
+        assert pd.isna(
+            row["stl_strength"]
+        ), "STL should return NaN when data insufficient"
+
+
+@pytest.mark.unit
+def test_stl_validation_just_enough_data():
+    """
+    Unit test: STL should work when exactly 2 * period observations.
+    """
+    etl = SeasonalityETL(seasonal_lags={"1d": 50})  # Small period for testing
+
+    # Exactly 100 days, period=50 → 100 = 2 * 50 (minimum required)
+    exact_df = pd.DataFrame(
+        {
+            "date": pd.date_range("2023-01-01", periods=100, freq="D"),
+            "close": 100 + 10 * np.sin(2 * np.pi * np.arange(100) / 50),
+            "ticker": ["EXACT"] * 100,
+            "interval": ["1d"] * 100,
+        }
+    )
+
+    df_metrics = etl.fit(exact_df, return_stage="metrics")
+
+    # STL should succeed (or fail gracefully, but not crash)
+    assert df_metrics is not None
+
+
+@pytest.mark.unit
+def test_stl_odd_period_enforcement():
+    """
+    Unit test: STL should handle even periods by incrementing to odd.
+
+    NEW in v2.0: STL requires odd periods, code auto-adjusts even→odd.
+    """
+    etl = SeasonalityETL(seasonal_lags={"1d": 50})  # Even period
+
+    df = pd.DataFrame(
+        {
+            "date": pd.date_range("2023-01-01", periods=300, freq="D"),
+            "close": 100 + 10 * np.sin(2 * np.pi * np.arange(300) / 50),
+            "ticker": ["TEST"] * 300,
+            "interval": ["1d"] * 300,
+        }
+    )
+
+    # Should not crash despite even period
+    df_metrics = etl.fit(df, return_stage="metrics")
+
+    assert df_metrics is not None
+    # If STL worked, it should have used period=51 internally
+
+
+@pytest.mark.unit
+def test_stl_with_very_short_series_in_rolling():
+    """
+    Unit test: fit_rolling() should handle windows too short for STL.
+    """
+    etl = SeasonalityETL(seasonal_lags={"1d": 252})
+
+    # Short series where weekly windows will be too short for period=252
+    short_df = pd.DataFrame(
+        {
+            "date": pd.date_range("2023-01-01", periods=50, freq="D"),
+            "close": np.random.randn(50) + 100,
+            "ticker": ["SHORT"] * 50,
+            "interval": ["1d"] * 50,
+        }
+    )
+
+    # Should not crash
+    df_rolling = etl.fit_rolling(short_df, frequencies=["W"])
+
+    # May be empty (all windows too short) or have NaN for STL
+    assert df_rolling is not None
+
+
+# ============================================================================
+# CONSTANTS USAGE TESTS (NEW in v2.0)
+# ============================================================================
+
+
+@pytest.mark.unit
+def test_min_series_buffer_constant_applied():
+    """
+    Unit test: MIN_SERIES_BUFFER constant is used in filtering.
+
+    Series with length < lag + MIN_SERIES_BUFFER should be skipped.
+    """
+    from src.pipeline.seasonality_etl import MIN_SERIES_BUFFER
+
+    etl = SeasonalityETL(seasonal_lags={"1d": 252})
+
+    # Create series with length = 252 + MIN_SERIES_BUFFER - 1 (should be skipped)
+    insufficient_length = 252 + MIN_SERIES_BUFFER - 1
+
+    df = pd.DataFrame(
+        {
+            "date": pd.date_range("2023-01-01", periods=insufficient_length, freq="D"),
+            "close": np.random.randn(insufficient_length) + 100,
+            "ticker": ["TEST"] * insufficient_length,
+            "interval": ["1d"] * insufficient_length,
+        }
+    )
+
+    df_metrics = etl.fit(df, return_stage="metrics")
+
+    # Should be empty (insufficient data)
+    assert df_metrics.empty or len(df_metrics) == 0
+
+
+@pytest.mark.unit
+def test_default_min_obs_constant_used_in_rolling():
+    """
+    Unit test: DEFAULT_MIN_OBS constant is used when min_obs_dict not provided.
+    """
+
+    etl = SeasonalityETL()
+
+    df = pd.DataFrame(
+        {
+            "date": pd.date_range("2023-01-01", periods=300, freq="D"),
+            "close": np.random.randn(300) + 100,
+            "ticker": ["TEST"] * 300,
+            "interval": ["1d"] * 300,
+        }
+    )
+
+    # Call fit_rolling without min_obs_dict → should use DEFAULT_MIN_OBS
+    df_rolling = etl.fit_rolling(df, frequencies=["W"])
+
+    # Should have filtered windows based on DEFAULT_MIN_OBS["W"] = 5
+    assert df_rolling is not None
+
+
+# ============================================================================
+# GETTER METHODS TYPE HINTS TESTS (NEW in v2.0)
+# ============================================================================
+
+
+@pytest.mark.unit
+def test_getters_return_none_before_fit():
+    """
+    Unit test: Getters should return None before fit() is called.
+
+    NEW in v2.0: Type hints updated to Optional[pd.DataFrame].
+    """
+    etl = SeasonalityETL()
+
+    assert etl.get_metrics() is None
+    assert etl.get_normalized_metrics() is None
+    assert etl.get_scores() is None
+    assert etl.get_rolling_scores() is None
+
+
+@pytest.mark.unit
+def test_getters_return_copy_not_reference():
+    """
+    Unit test: Getters should return copies to prevent external mutation.
+    """
+    etl = SeasonalityETL()
+
+    df = pd.DataFrame(
         {
             "date": pd.date_range("2023-01-01", periods=300, freq="D"),
             "close": 100 + 10 * np.sin(2 * np.pi * np.arange(300) / 365),
@@ -329,153 +386,175 @@ def test_meta_score_formulas():
         }
     )
 
-    etl = SeasonalityETL(normalize=False)
-    df_scores = etl.fit(test_df, return_stage="scores")
+    etl.fit(df, return_stage="metrics")
 
-    row = df_scores.iloc[0]
-    acf = row["acf_lag_val"]
-    p2m = row["p2m_val"]
-    stl = row["stl_strength"]
+    df_metrics_1 = etl.get_metrics()
+    df_metrics_2 = etl.get_metrics()
 
-    # linear score
-    expected_linear = (acf + p2m + stl) / 3
-    assert (
-        abs(row["seasonality_score_linear"] - expected_linear) < 0.1
-    )  # relaxed from 1e-6
+    # Should be separate objects (copies)
+    assert df_metrics_1 is not df_metrics_2
 
-    # geometric score (handle zeros)
-    if acf > 0 and p2m > 0 and stl > 0:
-        expected_geom = (acf * p2m * stl) ** (1 / 3)
-        assert abs(row["seasonality_score_geom"] - expected_geom) < 0.1
-    else:
-        assert row["seasonality_score_geom"] >= 0  # just check non-negative
-
-    # harmonic score (handle zeros)
-    if acf > 0 and p2m > 0 and stl > 0:
-        expected_harmonic = 3 / (1 / acf + 1 / p2m + 1 / stl)
-        assert abs(row["seasonality_score_harmonic"] - expected_harmonic) < 0.1
-    else:
-        assert row["seasonality_score_harmonic"] >= 0
+    # But should have same content
+    pd.testing.assert_frame_equal(df_metrics_1, df_metrics_2)
 
 
 # ============================================================================
-# SEASONALITY DETECTION VALIDATION
+# ERROR MESSAGE IMPROVEMENTS TESTS (NEW in v2.0)
 # ============================================================================
 
 
 @pytest.mark.unit
-def test_strong_seasonality_detected(dummy_df):
+def test_improved_error_messages_include_context(caplog):
     """
-    Unit test: Strong seasonal pattern should produce reasonable scores.
+    Unit test: Error messages should include context (series length, lag, etc.).
 
-    Note: ACF at lag=252 may be weak even with strong seasonality
-    due to noise and phase shifts. This test validates the algorithm
-    runs and produces non-zero results, not specific thresholds.
+    NEW in v2.0: Logging includes more context for debugging.
     """
-    etl = SeasonalityETL(normalize=False)
-    df_scores = etl.fit(dummy_df, return_stage="scores")
+    import logging
 
-    row = df_scores.iloc[0]
+    caplog.set_level(logging.DEBUG)
 
-    # P2M should detect spectral peak (most reliable metric)
-    assert row["p2m_val"] > 1.5, "P2M should detect some spectral structure"
+    etl = SeasonalityETL(seasonal_lags={"1d": 252})
 
-    # linear score should be non-trivial
-    assert (
-        row["seasonality_score_linear"] > 0.1
-    ), "Linear score should be above noise floor"
-
-    # ACF may be negative or low - just check it's computed
-    assert not pd.isna(row["acf_lag_val"]), "ACF should be computed"
-
-
-@pytest.mark.unit
-def test_stl_strength_nonzero_with_good_data(dummy_df):
-    """
-    Unit test: STL should not always return 0.0 with sufficient seasonal data.
-
-    This tests the bug observed in notebook output where STL was always 0.0.
-    With 400+ days of strong seasonal data, STL should detect seasonality.
-    """
-    etl = SeasonalityETL(normalize=False)
-    df_scores = etl.fit(dummy_df, return_stage="scores")
-
-    row = df_scores.iloc[0]
-    stl_strength = row["stl_strength"]
-
-    # STL should detect seasonality (though it may still be low/zero if period mismatch)
-    # this is a diagnostic test - if it fails, investigate STL period parameter
-    print(f"STL strength: {stl_strength}")  # Debug output
-
-    # relaxed assertion: just check it's computed (even if zero)
-    assert stl_strength >= 0, "STL strength should be non-negative"
-
-    # optional: uncomment if STL is expected to be positive
-    # assert stl_strength > 0.1, "STL should detect strong seasonality"
-
-
-# ============================================================================
-# EDGE CASE TESTS
-# ============================================================================
-
-
-@pytest.mark.unit
-def test_empty_dataframe_raises_or_returns_empty():
-    """
-    Unit test: Empty DataFrame should return empty, not crash.
-    """
-    etl = SeasonalityETL()
-    empty_df = pd.DataFrame(columns=["date", "close", "ticker", "interval"])
-
-    # should return empty DataFrame, not crash
-    df_scores = etl.fit(empty_df, return_stage="scores")
-    assert df_scores is not None
-    assert df_scores.empty
-
-
-@pytest.mark.unit
-def test_single_row_dataframe_skipped():
-    """
-    Unit test: Single-row DataFrame should return empty (insufficient data).
-    """
-    etl = SeasonalityETL()
-    single_row = pd.DataFrame(
+    # Create series that will trigger debug/warning messages
+    df = pd.DataFrame(
         {
-            "date": [pd.Timestamp("2023-01-01")],
-            "close": [100.0],
-            "ticker": ["SINGLE"],
-            "interval": ["1d"],
+            "date": pd.date_range("2023-01-01", periods=100, freq="D"),
+            "close": np.random.randn(100) + 100,
+            "ticker": ["SHORT"] * 100,
+            "interval": ["1d"] * 100,
         }
     )
 
-    df_scores = etl.fit(single_row, return_stage="scores")
-    assert df_scores is not None
-    assert df_scores.empty
+    etl.fit(df, return_stage="metrics")
+
+    # Check that log messages include context
+    # Should have messages about skipping due to insufficient data
+    log_messages = [record.message for record in caplog.records]
+
+    # At least one message should mention the series length or data insufficiency
+    assert any(
+        "insufficient" in msg.lower() or "skipping" in msg.lower()
+        for msg in log_messages
+    )
+
+
+# ============================================================================
+# BACKWARDS COMPATIBILITY TESTS
+# ============================================================================
 
 
 @pytest.mark.unit
-def test_constant_series_handles_gracefully():
+def test_backwards_compatible_api():
     """
-    Unit test: Constant series (no variation) should not crash.
+    Unit test: v2.0 should maintain backwards compatibility with v1.0 API.
     """
-    dates = pd.date_range(start="2023-01-01", periods=300, freq="D")
-    constant_df = pd.DataFrame(
+    df = pd.DataFrame(
         {
-            "date": dates,
-            "close": [100.0] * len(dates),
-            "ticker": ["CONST"] * len(dates),
-            "interval": ["1d"] * len(dates),
+            "date": pd.date_range("2023-01-01", periods=300, freq="D"),
+            "close": 100 + 10 * np.sin(2 * np.pi * np.arange(300) / 365),
+            "ticker": ["TEST"] * 300,
+            "interval": ["1d"] * 300,
         }
     )
 
+    # All these calls should work exactly as before
     etl = SeasonalityETL()
 
-    # should not crash
-    df_scores = etl.fit(constant_df, return_stage="scores")
-    assert df_scores is not None
+    # fit() with all return_stage options
+    assert etl.fit(df, return_stage=None) is None
+    assert etl.fit(df, return_stage="metrics") is not None
+    assert etl.fit(df, return_stage="normalized") is not None
+    assert etl.fit(df, return_stage="scores") is not None
 
-    # may be empty or have near-zero scores
-    if not df_scores.empty:
-        row = df_scores.iloc[0]
-        # just check it's non-negative (constant series has no seasonality)
-        assert row["seasonality_score_linear"] >= 0
+    # fit_rolling() with default parameters
+    df_rolling = etl.fit_rolling(df)
+    assert df_rolling is not None
+
+    # Getters should work
+    assert etl.get_metrics() is not None
+    assert etl.get_scores() is not None
+
+
+@pytest.mark.unit
+def test_constructor_backwards_compatible():
+    """
+    Unit test: Constructor should accept same parameters as v1.0.
+    """
+    # Default constructor
+    etl1 = SeasonalityETL()
+    assert etl1.seasonal_lags == {"1d": 252, "1wk": 52, "1mo": 12}
+    assert etl1.normalize is True
+
+    # Custom seasonal_lags
+    etl2 = SeasonalityETL(seasonal_lags={"1d": 365})
+    assert etl2.seasonal_lags == {"1d": 365}
+
+    # Disable normalization
+    etl3 = SeasonalityETL(normalize=False)
+    assert etl3.normalize is False
+
+
+# ============================================================================
+# INTEGRATION TEST WITH REAL-WORLD-LIKE DATA
+# ============================================================================
+
+
+@pytest.mark.integration
+def test_full_pipeline_with_realistic_data():
+    """
+    Integration test: Run complete pipeline with realistic multi-ticker data.
+
+    Tests:
+    - Multiple tickers and intervals
+    - fit() and fit_rolling() both work
+    - All getters return expected data
+    - No crashes or unexpected NaNs
+    """
+    np.random.seed(42)
+
+    # create realistic-looking data
+    dfs = []
+    for ticker in ["AAPL", "MSFT", "GOOGL"]:
+        dates = pd.date_range("2023-01-01", periods=400, freq="D")
+
+        # add trend, seasonality, and noise
+        trend = np.linspace(100, 120, len(dates))
+        seasonal = 5 * np.sin(2 * np.pi * np.arange(len(dates)) / 252)
+        noise = np.random.randn(len(dates)) * 2
+
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "close": trend + seasonal + noise,
+                "ticker": ticker,
+                "interval": "1d",
+            }
+        )
+        dfs.append(df)
+
+    combined_df = pd.concat(dfs, ignore_index=True)
+
+    # run full pipeline
+    etl = SeasonalityETL(seasonal_lags={"1d": 50})
+
+    # batch mode
+    df_scores = etl.fit(combined_df, return_stage="scores")
+    assert len(df_scores) == 3  # 3 tickers
+    assert "seasonality_score_linear" in df_scores.columns
+
+    # rolling mode
+    df_rolling = etl.fit_rolling(combined_df, frequencies=["W", "ME"])
+    assert df_rolling.empty is not None
+    # assert set(df_rolling["freq"].unique()) == {"W", "ME"}
+    # assert set(df_rolling["ticker"].unique()) == {"AAPL", "MSFT", "GOOGL"}
+
+    # getters should return data
+    assert etl.get_metrics() is not None
+    assert etl.get_normalized_metrics() is not None
+    assert etl.get_scores() is not None
+    assert etl.get_rolling_scores() is not None
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

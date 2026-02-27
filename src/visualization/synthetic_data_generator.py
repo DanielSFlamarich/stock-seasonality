@@ -1,3 +1,5 @@
+# src/visualization/synthetic_data_generator.py
+
 import numpy as np
 import pandas as pd
 

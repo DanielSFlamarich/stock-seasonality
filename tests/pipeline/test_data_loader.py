@@ -1,458 +1,443 @@
 # tests/pipeline/test_data_loader.py
-"""
-Unit and integration tests for src.pipeline.data_loader.DataLoader
 
-Test Categories:
-- Unit tests (mocked yfinance): fast, deterministic, cover edge cases
-- Integration tests (real yfinance): slower, validate end-to-end behavior
+from pathlib import Path
+from unittest.mock import patch
 
-Run fast tests only:
-    pytest tests/pipeline/test_data_loader.py -v -m "not integration"
-
-Run all tests:
-    pytest tests/pipeline/test_data_loader.py -v
-"""
-
-import logging
-
+import numpy as np
 import pandas as pd
 import pytest
-import yfinance as yf
 
-from src.pipeline.data_loader import DataLoader
+from src.pipeline.data_loader import (
+    MAX_RETRIES,
+    DataLoader,
+)
 
-# ============================================================================
-# FIXTURES
-# ============================================================================
-
-
-@pytest.fixture
-def dummy_config_file(tmp_path):
-    """
-    Single-ticker config for basic tests.
-    """
-    config_path = tmp_path / "tickers_list.yaml"
-    config_path.write_text("tickers:\n  - AAPL\n")
-    return str(config_path)
+# fixtures
 
 
 @pytest.fixture
-def multi_ticker_config(tmp_path):
+def temp_config_file(tmp_path):
     """
-    Multi-ticker config for testing batch downloads.
+    Create a minimal valid tickers YAML config.
     """
-    config_path = tmp_path / "tickers_multi.yaml"
-    config_path.write_text("tickers:\n  - AAPL\n  - MSFT\n  - INVALID_TICKER\n")
-    return str(config_path)
+    config = tmp_path / "tickers_list.yaml"
+    config.write_text("tickers:\n  - AAPL\n  - MSFT\n  - GOOGL\n")
+    return config
 
 
 @pytest.fixture
-def empty_config(tmp_path):
+def mock_yfinance_data():
     """
-    Config with empty tickers list.
+    Realistic yfinance DataFrame with standard columns.
     """
-    config_path = tmp_path / "empty.yaml"
-    config_path.write_text("tickers: []\n")
-    return str(config_path)
+    dates = pd.date_range("2023-01-01", periods=5, freq="D")
+    df = pd.DataFrame(
+        {
+            "Open": np.random.uniform(100, 200, 5),
+            "High": np.random.uniform(100, 200, 5),
+            "Low": np.random.uniform(100, 200, 5),
+            "Close": np.random.uniform(100, 200, 5),
+            "Volume": np.random.randint(1_000_000, 10_000_000, 5),
+        },
+        index=dates,
+    )
+    df.index.name = "Date"
+    return df
 
 
-@pytest.fixture
-def mock_yf_single_ticker():
-    """
-    Mocks yfinance download to return synthetic OHLCV data for one ticker.
-    Returns a function that can be used with monkeypatch or patch.
-    """
-
-    def _mock_download(ticker, start, end, interval, auto_adjust=True, progress=False):
-        # simulate realistic yfinance response
-        dates = pd.date_range(start=start, end=end, freq="D")[:5]  # 5 days
-        data = pd.DataFrame(
-            {
-                "Date": dates,
-                "Open": [100.0] * len(dates),
-                "High": [105.0] * len(dates),
-                "Low": [95.0] * len(dates),
-                "Close": [102.0] * len(dates),
-                "Volume": [1000000] * len(dates),
-            }
-        )
-        data = data.set_index("Date")
-        return data
-
-    return _mock_download
-
-
-@pytest.fixture
-def mock_yf_partial_failure():
-    """
-    Mocks yfinance.download to return data for valid tickers, empty for invalid.
-    Simulates the partial failure scenario.
-    """
-
-    def _mock_download(ticker, start, end, interval, auto_adjust=True, progress=False):
-        if ticker == "INVALID_TICKER":
-            return pd.DataFrame()  # Simulate failure
-
-        dates = pd.date_range(start=start, end=end, freq="D")[:5]
-        data = pd.DataFrame(
-            {
-                "Date": dates,
-                "Open": [100.0] * len(dates),
-                "High": [105.0] * len(dates),
-                "Low": [95.0] * len(dates),
-                "Close": [102.0] * len(dates),
-                "Volume": [1000000] * len(dates),
-            }
-        )
-        data = data.set_index("Date")
-        return data
-
-    return _mock_download
-
-
-# ============================================================================
-# UNIT TESTS (Fast, Mocked)
-# ============================================================================
+# Constructor validation
 
 
 @pytest.mark.unit
-def test_read_tickers_from_yaml(dummy_config_file):
+def test_constructor_with_valid_config(temp_config_file):
     """
-    Verify YAML config parsing returns list of tickers.
+    Test that constructor succeeds with valid config.
     """
-    loader = DataLoader(config_path=dummy_config_file)
+    loader = DataLoader(config_path=str(temp_config_file), use_cache=False)
+    # compare raw strings (avoid macOS /var -> /private/var symlink mismatch)
+    assert loader.config_path == str(temp_config_file)
+    assert loader.stats == {"success": 0, "failed": 0, "total": 0}
+    # no cache path yet — computed lazily in load()
+    assert loader.combined_cache_path is None
+
+
+@pytest.mark.unit
+def test_constructor_missing_config_raises():
+    """
+    Test that constructor raises FileNotFoundError for missing config.
+    """
+    with pytest.raises(FileNotFoundError, match="Config file not found"):
+        DataLoader(config_path="nonexistent/path.yaml")
+
+
+@pytest.mark.unit
+def test_constructor_with_directory_as_config(tmp_path):
+    """
+    Test that constructor raises ValueError when config_path is a directory.
+    """
+    with pytest.raises(ValueError, match="Config path is not a file"):
+        DataLoader(config_path=str(tmp_path))
+
+
+@pytest.mark.unit
+def test_constructor_with_explicit_cache_path(temp_config_file, tmp_path):
+    """
+    Test that explicit cache path overrides auto-computation.
+    """
+    cache_path = tmp_path / "my_cache.parquet"
+    loader = DataLoader(
+        config_path=str(temp_config_file),
+        combined_cache_path=str(cache_path),
+    )
+    assert loader.combined_cache_path == cache_path
+
+
+# YAML validation
+
+
+@pytest.mark.unit
+def test_read_tickers_valid(temp_config_file):
+    loader = DataLoader(config_path=str(temp_config_file), use_cache=False)
     tickers = loader._read_tickers()
-    assert isinstance(tickers, list)
-    assert "AAPL" in tickers
-    assert len(tickers) == 1
+    assert tickers == ["AAPL", "MSFT", "GOOGL"]
 
 
 @pytest.mark.unit
-def test_read_tickers_multi(multi_ticker_config):
-    """
-    Verify multi-ticker config parsing.
-    """
-    loader = DataLoader(config_path=multi_ticker_config)
-    tickers = loader._read_tickers()
-    assert len(tickers) == 3
-    assert set(tickers) == {"AAPL", "MSFT", "INVALID_TICKER"}
-
-
-@pytest.mark.unit
-def test_empty_config_returns_empty_list(empty_config):
-    """
-    Empty tickers list should return empty list (not crash).
-    """
-    loader = DataLoader(config_path=empty_config)
-    tickers = loader._read_tickers()
-    assert tickers == []
-
-
-@pytest.mark.unit
-def test_missing_config_file_raises_error(tmp_path):
-    """
-    Non-existent config file should raise FileNotFoundError.
-    """
-    with pytest.raises(FileNotFoundError):
-        loader = DataLoader(config_path=str(tmp_path / "nonexistent.yaml"))
+def test_read_tickers_missing_key(tmp_path):
+    config = tmp_path / "bad.yaml"
+    config.write_text("something_else:\n  - AAPL\n")
+    loader = DataLoader(config_path=str(config), use_cache=False)
+    with pytest.raises(ValueError, match="must contain 'tickers' key"):
         loader._read_tickers()
 
 
 @pytest.mark.unit
-def test_column_standardization(
-    monkeypatch, dummy_config_file, mock_yf_single_ticker, tmp_path
+def test_read_tickers_empty_list(tmp_path):
+    config = tmp_path / "empty.yaml"
+    config.write_text("tickers: []\n")
+    loader = DataLoader(config_path=str(config), use_cache=False)
+    with pytest.raises(ValueError, match="cannot be empty"):
+        loader._read_tickers()
+
+
+@pytest.mark.unit
+def test_read_tickers_non_string_items(tmp_path):
+    config = tmp_path / "bad_types.yaml"
+    config.write_text("tickers:\n  - 123\n  - AAPL\n")
+    loader = DataLoader(config_path=str(config), use_cache=False)
+    with pytest.raises(ValueError, match="must be strings"):
+        loader._read_tickers()
+
+
+# date validation
+
+
+@pytest.mark.unit
+def test_validate_date_valid():
+    DataLoader._validate_date("2023-01-01")  # should not raise
+
+
+@pytest.mark.unit
+def test_validate_date_invalid():
+    with pytest.raises(ValueError, match="Invalid date format"):
+        DataLoader._validate_date("not-a-date")
+
+
+@pytest.mark.unit
+def test_validate_date_wrong_format():
+    with pytest.raises(ValueError, match="Invalid date format"):
+        DataLoader._validate_date("01/01/2023")
+
+
+# interval validation
+
+
+@pytest.mark.unit
+def test_validate_intervals_valid():
+    DataLoader._validate_intervals(["1d", "1wk"])  # should not raise
+
+
+@pytest.mark.unit
+def test_validate_intervals_invalid():
+    with pytest.raises(ValueError, match="Invalid intervals"):
+        DataLoader._validate_intervals(["1d", "2y"])
+
+
+# cache hash
+
+
+@pytest.mark.unit
+def test_cache_hash_order_independent():
+    """
+    Same tickers in different order produce the same hash.
+    """
+    h1 = DataLoader._compute_cache_hash(
+        ["AAPL", "MSFT"], ["1d"], "2022-01-01", "2023-01-01"
+    )
+    h2 = DataLoader._compute_cache_hash(
+        ["MSFT", "AAPL"], ["1d"], "2022-01-01", "2023-01-01"
+    )
+    assert h1 == h2
+
+
+@pytest.mark.unit
+def test_cache_hash_different_intervals():
+    """
+    Different intervals produce different hashes.
+    """
+    h1 = DataLoader._compute_cache_hash(["AAPL"], ["1d"], "2022-01-01", "2023-01-01")
+    h2 = DataLoader._compute_cache_hash(["AAPL"], ["1wk"], "2022-01-01", "2023-01-01")
+    assert h1 != h2
+
+
+@pytest.mark.unit
+def test_cache_hash_different_dates():
+    """
+    Different date ranges produce different hashes.
+    """
+    h1 = DataLoader._compute_cache_hash(["AAPL"], ["1d"], "2022-01-01", "2023-01-01")
+    h2 = DataLoader._compute_cache_hash(["AAPL"], ["1d"], "2020-01-01", "2023-01-01")
+    assert h1 != h2
+
+
+@pytest.mark.unit
+def test_cache_hash_length():
+    h = DataLoader._compute_cache_hash(["AAPL"], ["1d"], "2022-01-01", "2023-01-01")
+    assert len(h) == 8
+
+
+# cache freshness
+
+
+@pytest.mark.unit
+def test_is_cache_fresh_when_no_path_set(temp_config_file):
+    """
+    Cache is not fresh when no path has been computed yet.
+    """
+    loader = DataLoader(config_path=str(temp_config_file), use_cache=True)
+    assert loader._is_cache_fresh() is False
+
+
+@pytest.mark.unit
+def test_is_cache_fresh_nonexistent(temp_config_file):
+    """Cache is not fresh when file doesn't exist."""
+    loader = DataLoader(
+        config_path=str(temp_config_file),
+        use_cache=True,
+        combined_cache_path="/tmp/nonexistent_cache.parquet",
+    )
+    assert loader._is_cache_fresh() is False
+
+
+@pytest.mark.unit
+def test_is_cache_fresh_recent_file(temp_config_file, tmp_path):
+    """
+    A recently created cache file is fresh.
+    """
+    cache_file = tmp_path / "fresh_cache.parquet"
+    cache_file.touch()
+
+    loader = DataLoader(
+        config_path=str(temp_config_file),
+        use_cache=True,
+        combined_cache_path=str(cache_file),
+    )
+    assert loader._is_cache_fresh() is True
+
+
+# build cache path
+
+
+@pytest.mark.unit
+def test_build_cache_path_includes_dates(temp_config_file):
+    """Cache filename encodes the date range."""
+    loader = DataLoader(config_path=str(temp_config_file), use_cache=False)
+    path = loader._build_cache_path(["AAPL"], ["1d"], "2022-01-01", "2023-01-01")
+    assert "2022-01-01" in path.name
+    assert "2023-01-01" in path.name
+    assert path.suffix == ".parquet"
+
+
+@pytest.mark.unit
+def test_build_cache_path_different_params_differ(temp_config_file):
+    """
+    Different query params produce different filenames.
+    """
+    loader = DataLoader(config_path=str(temp_config_file), use_cache=False)
+    p1 = loader._build_cache_path(["AAPL"], ["1d"], "2022-01-01", "2023-01-01")
+    p2 = loader._build_cache_path(["AAPL"], ["1d"], "2020-01-01", "2023-01-01")
+    assert p1 != p2
+
+
+# retry logic (mocked)
+
+
+@pytest.mark.unit
+@patch("src.pipeline.data_loader.yf.download")
+def test_retry_success_first_attempt(
+    mock_download, temp_config_file, mock_yfinance_data
 ):
-    """
-    Verify columns are lowercased and 'date' is datetime.
-    """
-    monkeypatch.setattr(yf, "download", mock_yf_single_ticker)
+    mock_download.return_value = mock_yfinance_data
+    loader = DataLoader(config_path=str(temp_config_file), use_cache=False)
+    result = loader._download_with_retry("AAPL", "2023-01-01", "2023-01-10", "1d")
 
-    loader = DataLoader(
-        config_path=dummy_config_file,
-        use_cache=False,
-        combined_cache_path=tmp_path / "test.parquet",
-    )
-    df = loader.load(start_date="2023-01-01", end_date="2023-01-10", intervals=["1d"])
-
-    # Check all columns are lowercase
-    assert all(
-        col.islower() for col in df.columns
-    ), f"Non-lowercase columns: {df.columns}"
-
-    # Check 'date' column exists and is datetime
-    assert "date" in df.columns, "Missing 'date' column after standardization"
-    assert pd.api.types.is_datetime64_any_dtype(
-        df["date"]
-    ), "'date' column is not datetime"
-
-    # Check expected columns present
-    expected_cols = {
-        "date",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "ticker",
-        "interval",
-    }
-    assert expected_cols.issubset(
-        set(df.columns)
-    ), f"Missing columns: {expected_cols - set(df.columns)}"
+    assert result is not None
+    assert not result.empty
+    assert mock_download.call_count == 1
 
 
 @pytest.mark.unit
-def test_partial_failure_continues(
-    monkeypatch, multi_ticker_config, mock_yf_partial_failure, tmp_path, caplog
+@patch("src.pipeline.data_loader.time.sleep")
+@patch("src.pipeline.data_loader.yf.download")
+def test_retry_success_after_failures(
+    mock_download, mock_sleep, temp_config_file, mock_yfinance_data
 ):
-    """
-    Unit test: One ticker fails (INVALID_TICKER), others succeed.
-    Verify: valid data returned, no exception raised.
-    """
-    monkeypatch.setattr(yf, "download", mock_yf_partial_failure)
+    mock_download.side_effect = [
+        Exception("Network error"),
+        Exception("Timeout"),
+        mock_yfinance_data,
+    ]
+    loader = DataLoader(config_path=str(temp_config_file), use_cache=False)
+    result = loader._download_with_retry("AAPL", "2023-01-01", "2023-01-10", "1d")
 
-    # set logging level to capture warnings
-    caplog.set_level(logging.WARNING)
-
-    loader = DataLoader(
-        config_path=multi_ticker_config,
-        use_cache=False,
-        verbose=False,  # Disable tqdm progress bar
-        combined_cache_path=tmp_path / "multi.parquet",
-    )
-
-    df = loader.load(start_date="2023-01-01", end_date="2023-01-10", intervals=["1d"])
-
-    # should have data for AAPL and MSFT only (INVALID_TICKER should be skipped)
-    assert not df.empty, "DataFrame should not be empty"
-    assert set(df["ticker"].unique()) == {
-        "AAPL",
-        "MSFT",
-    }, "Should only have valid tickers"
-
-    # verify INVALID_TICKER is NOT in the results (it failed gracefully)
-    assert "INVALID_TICKER" not in df["ticker"].values
+    assert result is not None
+    assert not result.empty
+    assert mock_download.call_count == 3
+    assert mock_sleep.call_count == 2
 
 
 @pytest.mark.unit
-def test_all_tickers_fail_raises_error(monkeypatch, dummy_config_file, tmp_path):
-    """
-    If all tickers fail to download, should raise ValueError.
-    """
-    # Mock yfinance to always return empty DataFrame
-    monkeypatch.setattr(yf, "download", lambda *args, **kwargs: pd.DataFrame())
+@patch("src.pipeline.data_loader.time.sleep")
+@patch("src.pipeline.data_loader.yf.download")
+def test_retry_all_failures_returns_none(mock_download, mock_sleep, temp_config_file):
+    mock_download.side_effect = Exception("Persistent error")
+    loader = DataLoader(config_path=str(temp_config_file), use_cache=False)
+    result = loader._download_with_retry("AAPL", "2023-01-01", "2023-01-10", "1d")
 
-    loader = DataLoader(
-        config_path=dummy_config_file,
-        use_cache=False,
-        combined_cache_path=tmp_path / "test.parquet",
-    )
-
-    with pytest.raises(ValueError, match="No data could be loaded"):
-        loader.load(start_date="2023-01-01", end_date="2023-01-10", intervals=["1d"])
+    assert result is None
+    assert mock_download.call_count == MAX_RETRIES
+    assert mock_sleep.call_count == MAX_RETRIES - 1
 
 
 @pytest.mark.unit
-def test_multiple_intervals(
-    monkeypatch, dummy_config_file, mock_yf_single_ticker, tmp_path
-):
-    """
-    Load data for multiple intervals (1d, 1wk) simultaneously.
-    """
-    monkeypatch.setattr(yf, "download", mock_yf_single_ticker)
+@patch("src.pipeline.data_loader.time.sleep")
+@patch("src.pipeline.data_loader.yf.download")
+def test_retry_empty_dataframe_retries(mock_download, mock_sleep, temp_config_file):
+    mock_download.return_value = pd.DataFrame()
+    loader = DataLoader(config_path=str(temp_config_file), use_cache=False)
+    result = loader._download_with_retry("BAD", "2023-01-01", "2023-01-10", "1d")
 
-    loader = DataLoader(
-        config_path=dummy_config_file,
-        use_cache=False,
-        combined_cache_path=tmp_path / "test.parquet",
-    )
-    df = loader.load(
-        start_date="2023-01-01", end_date="2023-01-31", intervals=["1d", "1wk"]
-    )
+    assert result is None
+    assert mock_download.call_count == MAX_RETRIES
 
-    # Should have both intervals
-    assert set(df["interval"].unique()) == {"1d", "1wk"}, "Missing intervals"
 
-    # Each ticker-interval combination should have data
-    groups = df.groupby(["ticker", "interval"]).size()
-    assert (
-        len(groups) == 2
-    ), "Should have 2 ticker-interval combinations (AAPL-1d, AAPL-1wk)"
+# load method (mocked)
 
 
 @pytest.mark.unit
-def test_cache_path_normalization(dummy_config_file, tmp_path):
-    """
-    Verify cache path is normalized (no '..' allowed).
-    Security: prevent path traversal attacks.
-    """
-    # This is a security test - ensure Path.resolve() is used
-    safe_path = tmp_path / "cache" / "data.parquet"
-    loader = DataLoader(config_path=dummy_config_file, combined_cache_path=safe_path)
-
-    # Path should be absolute and normalized
-    assert loader.combined_cache_path.is_absolute()
-    assert ".." not in str(loader.combined_cache_path)
-
-
-# ============================================================================
-# INTEGRATION TESTS (Slower, Real yfinance)
-# ============================================================================
-
-
-@pytest.mark.integration
-def test_data_download_and_combined_cache(dummy_config_file, tmp_path):
-    """
-    Integration test: real yfinance download + cache creation.
-    Validates end-to-end data loading pipeline.
-    """
-    combined_path = tmp_path / "all_data_test.parquet"
-
+@patch("src.pipeline.data_loader.yf.download")
+def test_load_default_end_date(mock_download, temp_config_file, mock_yfinance_data):
+    mock_download.return_value = mock_yfinance_data
     loader = DataLoader(
-        config_path=dummy_config_file,
-        use_cache=False,
-        verbose=True,
-        save_combined=True,
-        combined_cache_path=combined_path,
+        config_path=str(temp_config_file), use_cache=False, save_combined=False
     )
+    df = loader.load(start_date="2023-01-01")
 
-    df = loader.load(start_date="2023-01-01", end_date="2023-01-10", intervals=["1d"])
-
-    # Validate DataFrame structure
-    assert isinstance(df, pd.DataFrame)
     assert not df.empty
     assert "ticker" in df.columns
     assert "interval" in df.columns
-    assert (df["ticker"] == "AAPL").all()
-    assert (df["interval"] == "1d").all()
-
-    # Validate cache file created
-    assert combined_path.exists()
-
-    # Validate cache file is valid Parquet
-    df_cached = pd.read_parquet(combined_path)
-    pd.testing.assert_frame_equal(df, df_cached)
-
-
-@pytest.mark.integration
-def test_combined_cache_file_reuse(dummy_config_file, tmp_path):
-    """
-    Integration test: verify cache reuse path.
-    Second load should read from cache, not download.
-    """
-    combined_path = tmp_path / "all_data_test.parquet"
-
-    # First load to create the file
-    loader = DataLoader(
-        config_path=dummy_config_file,
-        use_cache=False,
-        save_combined=True,
-        combined_cache_path=combined_path,
-    )
-    df1 = loader.load(start_date="2023-01-01", end_date="2023-01-10", intervals=["1d"])
-
-    # Second load should use cache (no download)
-    loader_cached = DataLoader(
-        config_path=dummy_config_file, use_cache=True, combined_cache_path=combined_path
-    )
-    df2 = loader_cached.load(
-        start_date="2023-01-01", end_date="2023-01-10", intervals=["1d"]
-    )
-
-    # DataFrames should be identical
-    pd.testing.assert_frame_equal(df1, df2)
-
-
-@pytest.mark.integration
-def test_real_multi_ticker_download(multi_ticker_config, tmp_path):
-    """
-    Integration test: download multiple tickers with real yfinance.
-    Note: INVALID_TICKER will fail, but AAPL/MSFT should succeed.
-    """
-    loader = DataLoader(
-        config_path=multi_ticker_config,
-        use_cache=False,
-        verbose=True,
-        combined_cache_path=tmp_path / "multi.parquet",
-    )
-
-    df = loader.load(start_date="2023-01-01", end_date="2023-01-10", intervals=["1d"])
-
-    # Should have at least 2 valid tickers (AAPL, MSFT)
-    assert df["ticker"].nunique() >= 2
-    assert "AAPL" in df["ticker"].values
-    assert "MSFT" in df["ticker"].values
-
-
-# ============================================================================
-# EDGE CASE TESTS
-# ============================================================================
-
-
-@pytest.mark.unit
-def test_date_column_parsing_with_timezone(monkeypatch, dummy_config_file, tmp_path):
-    """
-    Verify date column handles timezone-aware datetimes from yfinance.
-    Some yfinance responses include tz info.
-    """
-
-    def _mock_with_tz(*args, **kwargs):
-        dates = pd.date_range(start="2023-01-01", end="2023-01-05", freq="D", tz="UTC")
-        data = pd.DataFrame(
-            {
-                "Date": dates,
-                "Close": [100.0] * len(dates),
-            }
-        )
-        data = data.set_index("Date")
-        return data
-
-    monkeypatch.setattr(yf, "download", _mock_with_tz)
-
-    loader = DataLoader(
-        config_path=dummy_config_file,
-        use_cache=False,
-        combined_cache_path=tmp_path / "test.parquet",
-    )
-    df = loader.load(start_date="2023-01-01", end_date="2023-01-05", intervals=["1d"])
-
-    # should handle timezone-aware dates without error
     assert "date" in df.columns
-    assert pd.api.types.is_datetime64_any_dtype(df["date"])
 
 
 @pytest.mark.unit
-def test_nested_tuple_columns_flattened(monkeypatch, dummy_config_file, tmp_path):
+@patch("src.pipeline.data_loader.yf.download")
+def test_load_sets_cache_path_from_params(
+    mock_download, temp_config_file, mock_yfinance_data
+):
     """
-    Unit test: Verify nested tuple columns (from multi-ticker downloads) are flattened.
-    yfinance sometimes returns MultiIndex columns.
+    load() computes a cache path that includes the date range.
     """
+    mock_download.return_value = mock_yfinance_data
+    loader = DataLoader(
+        config_path=str(temp_config_file), use_cache=False, save_combined=False
+    )
+    assert loader.combined_cache_path is None
 
-    def _mock_multi_index(*args, **kwargs):
-        dates = pd.date_range(start="2023-01-01", end="2023-01-05", freq="D")
-        data = pd.DataFrame(
-            {
-                ("Close", "AAPL"): [100.0] * len(dates),
-                ("Volume", "AAPL"): [1000] * len(dates),
-                ("Open", "AAPL"): [100.0] * len(dates),
-                ("High", "AAPL"): [100.0] * len(dates),
-                ("Low", "AAPL"): [100.0] * len(dates),
-            },
-            index=dates,
-        )
-        data.index.name = "Date"
-        return data
+    loader.load(start_date="2022-01-01", end_date="2023-01-01")
 
-    monkeypatch.setattr(yf, "download", _mock_multi_index)
+    assert loader.combined_cache_path is not None
+    assert "2022-01-01" in loader.combined_cache_path.name
+    assert "2023-01-01" in loader.combined_cache_path.name
+
+
+@pytest.mark.unit
+@patch("src.pipeline.data_loader.time.sleep")
+@patch("src.pipeline.data_loader.yf.download")
+def test_load_statistics_tracking(
+    mock_download, mock_sleep, temp_config_file, mock_yfinance_data
+):
+    # AAPL succeeds, MSFT fails (3x), GOOGL succeeds
+    mock_download.side_effect = [
+        mock_yfinance_data,
+        Exception("Error"),
+        Exception("Error"),
+        Exception("Error"),
+        mock_yfinance_data,
+    ]
+    loader = DataLoader(
+        config_path=str(temp_config_file), use_cache=False, save_combined=False
+    )
+    loader.load(start_date="2023-01-01", end_date="2023-01-10")
+
+    assert loader.stats["success"] == 2
+    assert loader.stats["failed"] == 1
+    assert loader.stats["total"] == 3
+
+
+@pytest.mark.unit
+@patch("src.pipeline.data_loader.time.sleep")
+@patch("src.pipeline.data_loader.yf.download")
+def test_load_all_failures_raises(mock_download, mock_sleep, temp_config_file):
+    mock_download.side_effect = Exception("Everything is broken")
+    loader = DataLoader(
+        config_path=str(temp_config_file), use_cache=False, save_combined=False
+    )
+    with pytest.raises(ValueError, match="No data could be loaded"):
+        loader.load(start_date="2023-01-01")
+
+
+@pytest.mark.unit
+def test_load_invalid_date_raises(temp_config_file):
+    loader = DataLoader(config_path=str(temp_config_file), use_cache=False)
+    with pytest.raises(ValueError, match="Invalid date format"):
+        loader.load(start_date="bad-date")
+
+
+@pytest.mark.unit
+def test_load_invalid_interval_raises(temp_config_file):
+    loader = DataLoader(config_path=str(temp_config_file), use_cache=False)
+    with pytest.raises(ValueError, match="Invalid intervals"):
+        loader.load(start_date="2023-01-01", intervals=["2y"])
+
+
+# integration tests (real API)
+
+
+@pytest.mark.integration
+def test_integration_download_single_ticker(temp_config_file):
+    """
+    Smoke test: download a small date range for one ticker.
+    """
+    config = Path(temp_config_file).parent / "single.yaml"
+    config.write_text("tickers:\n  - SPY\n")
 
     loader = DataLoader(
-        config_path=dummy_config_file,
-        use_cache=False,
-        combined_cache_path=tmp_path / "test.parquet",
+        config_path=str(config), use_cache=False, save_combined=False, verbose=True
     )
-    df = loader.load(start_date="2023-01-01", end_date="2023-01-05", intervals=["1d"])
+    df = loader.load(start_date="2024-01-01", end_date="2024-01-10")
 
-    # all columns should be strings (no tuples)
-    assert all(
-        isinstance(col, str) for col in df.columns
-    ), f"Non-string columns found: {[c for c in df.columns if not isinstance(c, str)]}"
+    assert not df.empty
+    assert "close" in df.columns
+    assert "ticker" in df.columns
+    assert df["ticker"].iloc[0] == "SPY"
+    assert loader.stats["success"] >= 1

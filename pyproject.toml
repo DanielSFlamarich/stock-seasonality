@@ -14,8 +14,19 @@ dependencies = [
     "scikit-learn>=1.3.0",
 ]
 
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "source"}
+
+[tool.setuptools.packages.find]
+where = ["source"]
+
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["source"]
 markers = [
     "unit: Fast tests with mocked dependencies",
     "integration: Slower tests with real external APIs",

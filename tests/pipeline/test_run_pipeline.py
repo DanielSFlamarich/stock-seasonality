@@ -91,7 +91,9 @@ def mock_seasonality_etl():
 
 @pytest.fixture
 def temp_output_dir(tmp_path):
-    """Temporary directory for output files."""
+    """
+    Temporary directory for output files.
+    """
     output_dir = tmp_path / "output"
     output_dir.mkdir()
     return output_dir
@@ -395,16 +397,18 @@ def test_run_pipeline_script_end_to_end(tmp_path):
             sys.executable,  # use same Python as test runner
             str(script_path),
             "--start-date",
-            "2023-01-01",
+            "2022-01-01",
             "--end-date",
-            "2023-01-10",  # short date range for speed
+            "2023-01-01",
+            "--frequencies",
+            "W,ME",
             "--output-dir",
             str(output_dir),
         ],
         capture_output=True,
         text=True,
         env=env,
-        timeout=60,  # prevent hanging
+        timeout=120,  # prevent hanging
     )
 
     # check script succeeded

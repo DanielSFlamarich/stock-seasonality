@@ -22,7 +22,7 @@ from src.pipeline.seasonality_etl import SeasonalityETL  # noqa: E402
 
 def run_pipeline(
     config_path: str = "config/tickers_list.yaml",
-    start_date: str = "2022-01-01",
+    start_date: str = "2019-01-01",
     end_date: Optional[str] = None,
     intervals: Optional[List[str]] = None,
     output_dir: str = "data/processed",
