@@ -1,4 +1,5 @@
 # src/scoring/meta_scores.py
+
 """
 Composite seasonality scores combining ACF, P2M, and STL metrics.
 
@@ -92,21 +93,19 @@ def add_meta_scores(
     if not np.isclose(sum(weights), 1.0):
         raise ValueError(f"Weights must sum to 1, got {sum(weights)}")
 
-    # Clip to avoid numerical issues
+    # clip to avoid numerical issues
     vals = df[metrics].clip(lower=eps)
 
-    # Linear: weighted sum (most interpretable)
+    # linear: weighted sum (most interpretable)
     df["seasonality_score_linear"] = sum(w * vals[m] for w, m in zip(weights, metrics))
 
-    # Geometric: exp(weighted log-sum)
+    # geometric: exp(weighted log-sum)
     df["seasonality_score_geom"] = np.exp(
         sum(w * np.log(vals[m]) for w, m in zip(weights, metrics))
     )
 
-    # Harmonic: 1 / weighted(1/x)
-    df["seasonality_score_harmonic"] = 1 / sum(
-        w / vals[m] for w, m in zip(weights, metrics)
-    )
+    # harmonic: 1 / weighted(1/x)
+    df["seasonality_score_harmonic"] = 1 / sum(w / vals[m] for w, m in zip(weights, metrics))
 
     return df
 

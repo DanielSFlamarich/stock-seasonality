@@ -1,4 +1,5 @@
 # src/pipeline/run_pipeline.py
+
 import argparse
 import logging
 import sys
@@ -9,12 +10,14 @@ from typing import List, Optional
 import pandas as pd
 
 # set up logging
-logging.basicConfig(
-    format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO
-)
+logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 
 # add repo root to sys.path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv()
 
 from src.pipeline.data_loader import DataLoader  # noqa: E402
 from src.pipeline.seasonality_etl import SeasonalityETL  # noqa: E402
@@ -22,7 +25,7 @@ from src.pipeline.seasonality_etl import SeasonalityETL  # noqa: E402
 
 def run_pipeline(
     config_path: str = "config/tickers_list.yaml",
-    start_date: str = "2022-01-01",
+    start_date: str = "2019-01-01",
     end_date: Optional[str] = None,
     intervals: Optional[List[str]] = None,
     output_dir: str = "data/processed",
@@ -204,8 +207,7 @@ Examples:
     parser.add_argument(
         "--frequencies",
         default="W,ME,QE,YE",
-        help="Comma-separated pandas frequency codes (e.g., 'W,ME,QE,YE'). "
-        "Default: W,ME,QE,YE",
+        help="Comma-separated pandas frequency codes (e.g., 'W,ME,QE,YE'). " "Default: W,ME,QE,YE",
     )
     parser.add_argument(
         "--output-dir",

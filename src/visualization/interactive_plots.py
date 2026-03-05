@@ -1,3 +1,5 @@
+# src/visualization/interactive_plots.py
+
 import pandas as pd
 import plotly.graph_objects as go
 from ipywidgets import interact

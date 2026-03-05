@@ -1,0 +1,28 @@
+# config/prompts.yaml
+#
+# LLM prompt configuration for report_generator.py.
+#
+# Editing this file changes the suggestion output without touching Python code.
+# Fields consumed by report_generator._get_llm_suggestion():
+#   model        : Anthropic model string
+#   max_tokens   : hard cap on suggestion length
+#   template     : prompt body; placeholders {ticker}, {freq_label}, {gap_desc},
+#                  {peak_count} are substituted at call time.
+
+suggestion:
+  model: claude-sonnet-4-6
+  max_tokens: 120
+  template: |
+    You are explaining stock market patterns to someone who has never invested before.
+
+    The stock '{ticker}' has a strong {freq_label} seasonal pattern.
+    Based on historical data, its price tends to reach a high point {gap_desc},
+    and this pattern has been detected {peak_count} times in the data.
+
+    Write exactly 2 sentences:
+    1. When this stock tends to peak (use plain, everyday language, no jargon).
+    2. A simple suggestion: roughly when to consider buying (before the peak)
+       and when to consider selling (near the peak).
+
+    Important: do not give financial advice or guarantees.
+    Keep it factual, simple, and under 60 words total.

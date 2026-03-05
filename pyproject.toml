@@ -12,25 +12,44 @@ dependencies = [
     "tqdm>=4.60.0",
     "scipy>=1.10.0",
     "scikit-learn>=1.3.0",
+    "python-dotenv>=1.2.2",
+    "anthropic>=0.84.0",
+    "pyyaml>=6.0.3",
+    "pyarrow>=23.0.1",
+    "plotly>=6.6.0",
+    "ipywidgets>=8.1.8",
+    "jupyterlab>=4.5.5",
 ]
+
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 markers = [
     "unit: Fast tests with mocked dependencies",
     "integration: Slower tests with real external APIs",
-    "slow: Very slow tests (>30 seconds)"
+    "slow: Very slow tests (>30 seconds)",
+    "llm: Tests that make real Anthropic API calls",
 ]
 
 [tool.black]
-line-length = 88
+line-length = 100
 target-version = ["py311"]
 
 [tool.isort]
 profile = "black"
 
 [tool.ruff]
-line-length = 88
+line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
@@ -38,8 +57,9 @@ select = ["E", "F", "I"]
 
 [dependency-groups]
 dev = [
+    "pre-commit>=4.5.1",
+    "pytest>=8.0.0",
     "pytest-cov>=7.0.0",
+    "black>=24.0.0",
+    "ruff>=0.9.0",
 ]
-
-[project.optional-dependencies]
-dev = ["ruff>=0.4.0"]
