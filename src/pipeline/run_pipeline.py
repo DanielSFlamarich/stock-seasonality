@@ -1,4 +1,5 @@
 # src/pipeline/run_pipeline.py
+
 import argparse
 import logging
 import sys
@@ -9,12 +10,14 @@ from typing import List, Optional
 import pandas as pd
 
 # set up logging
-logging.basicConfig(
-    format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO
-)
+logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 
 # add repo root to sys.path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv()
 
 from src.pipeline.data_loader import DataLoader  # noqa: E402
 from src.pipeline.seasonality_etl import SeasonalityETL  # noqa: E402
@@ -204,8 +207,7 @@ Examples:
     parser.add_argument(
         "--frequencies",
         default="W,ME,QE,YE",
-        help="Comma-separated pandas frequency codes (e.g., 'W,ME,QE,YE'). "
-        "Default: W,ME,QE,YE",
+        help="Comma-separated pandas frequency codes (e.g., 'W,ME,QE,YE'). " "Default: W,ME,QE,YE",
     )
     parser.add_argument(
         "--output-dir",
