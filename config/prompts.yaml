@@ -2,7 +2,6 @@
 #
 # LLM prompt configuration for report_generator.py.
 #
-# Editing this file changes the suggestion output without touching Python code.
 # Fields consumed by report_generator._get_llm_suggestion():
 #   model        : Anthropic model string
 #   max_tokens   : hard cap on suggestion length
@@ -11,18 +10,35 @@
 
 suggestion:
   model: claude-sonnet-4-6
-  max_tokens: 120
+  max_tokens: 140
   template: |
-    You are explaining stock market patterns to someone who has never invested before.
+    You are a concise financial analyst summarising a seasonal price pattern for a retail investor.
 
-    The stock '{ticker}' has a strong {freq_label} seasonal pattern.
-    Based on historical data, its price tends to reach a high point {gap_desc},
-    and this pattern has been detected {peak_count} times in the data.
+    Stock: {ticker}
+    Pattern frequency: {freq_label}
+    Historical peaks detected: {peak_count} (more peaks = more reliable pattern)
+    Typical gap between peaks: {gap_desc}
 
-    Write exactly 2 sentences:
-    1. When this stock tends to peak (use plain, everyday language, no jargon).
-    2. A simple suggestion: roughly when to consider buying (before the peak)
-       and when to consider selling (near the peak).
+    Seasonality evidence (all metrics range 0–1; closer to 1 = stronger signal):
+    - ACF score: {acf_score} --> how consistently the price cycle repeats
+    - P2M score: {p2m_score} --> how dominant the seasonal frequency is in the price spectrum
+    - STL score: {stl_score} --> how much of the price movement is explained by the seasonal component
 
-    Important: do not give financial advice or guarantees.
-    Keep it factual, simple, and under 60 words total.
+    Write exactly 3 sentences. No more, no fewer:
+    1. Introduce reason why the ticker has been flagged.
+    2. Describe when this stock historically tends to peak and what kind of seasonal pattern
+       the scores above suggest (e.g. consistent cycle, dominant frequency, clean component).
+    3. Give a specific, actionable suggestion: roughly when to consider buying (before the peak)
+       and when to consider selling (near the peak). Be concrete about timing.
+
+    Rules:
+    - Use plain English; no jargon.
+    - Do not use the word "significant" or "historically" more than once.
+    - Do not add disclaimers beyond what is in the example below.
+    - Total response must be under 100 words.
+
+    Example output for a different stock:
+    "XYZ shows a strong, clean seasonal cycle every ~90 days driven mainly by a dominant
+    periodic signal, typically peaking in mid-quarter. Consider buying 3–4 weeks before
+    that point and selling near the peak, keeping in mind past patterns don't guarantee
+    future results."

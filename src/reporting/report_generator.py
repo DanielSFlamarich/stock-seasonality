@@ -302,6 +302,9 @@ def _build_freq_entry(
             peak_count=row.get("peak_count"),
             mean_gap=row.get("mean_peak_gap_days"),
             std_gap=row.get("std_peak_gap_days"),
+            acf_score=row.get("acf_lag_val_mean"),
+            p2m_score=row.get("p2m_val_mean"),
+            stl_score=row.get("stl_strength_mean"),
             client=client,
             prompt_cfg=prompt_cfg,
         )
@@ -315,6 +318,9 @@ def _get_llm_suggestion(
     peak_count,
     mean_gap,
     std_gap,
+    acf_score,
+    p2m_score,
+    stl_score,
     client: anthropic.Anthropic,
     prompt_cfg: dict,
 ) -> Optional[str]:
@@ -334,11 +340,22 @@ def _get_llm_suggestion(
     else:
         gap_desc = "at irregular intervals"
 
+    def _fmt_score(v) -> str:
+        """
+        Format a metric score as e.g. '0.82' or 'n/a' if missing/NaN.
+        """
+        if v is None or _is_nan(v):
+            return "n/a"
+        return f"{float(v):.2f}"
+
     prompt = prompt_cfg["template"].format(
         ticker=ticker,
         freq_label=freq_label,
         gap_desc=gap_desc,
         peak_count=peak_count,
+        acf_score=_fmt_score(acf_score),
+        p2m_score=_fmt_score(p2m_score),
+        stl_score=_fmt_score(stl_score),
     )
 
     try:
