@@ -7,37 +7,36 @@ long_process_refresh_seconds: 30
 
 # ── tickers ──────────────────────────────────────────────────
 tickers:
+  # US large cap / ETFs, strong history, good seasonal candidates
   - AAPL
   - MSFT
-  - GDX
-  - IONQ
-  - 7974.T
-  - CGW
-  - PTLC
-  - HD
-  - QS
   - NVDA
-  - AVAV
-  - SMCI
-  - BB
-  - FDX
-  - TMC
-  - PAYX
-  - SRFM
-  - PLTR
-  - SRFM
-  - ULY
-  - PSTV
-  - CRWD
-  - GIS
-  - NVO
-  - GCTK
-  - SITM
-  - SONM
-  - CHYM
-  - TIGR
-  - QSI
-  - ICU
-  - BMBL
-  - MONC.VI
   - HD
+  - FDX
+  - PAYX
+  - GIS        # General Mills, consumer staples, textbook seasonality
+  - NVO        # Novo Nordisk
+
+  # sector ETFs — known seasonal patterns
+  - GDX        # gold miners
+  - CGW        # water infrastructure
+  - XLE        # energy, strong winter/summer cycle
+  - GLD        # gold, macro seasonal
+  - XLV        # healthcare, defensive seasonal
+
+  # growth / thematic
+  - PLTR
+  - CRWD
+  - IONQ
+  - QS
+  - SMCI
+
+  # speculative (kept for contrast, expect weak/NaN metrics)
+  - BB
+  - BMBL
+
+  # international
+  - 7974.T     # Nintendo — Tokyo
+  - MONC.VI    # Moncler — Vienna
+  - BAS.DE     # BASF — Frankfurt, energy-linked
+  - ALV.DE     # Allianz — Frankfurt, Q4 dividend cycle
