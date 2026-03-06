@@ -18,9 +18,12 @@ Design principles:
 import numpy as np
 import pandas as pd
 import pytest
+from dotenv import load_dotenv
 
 from src.pipeline.seasonality_etl import SeasonalityETL
 from src.visualization.synthetic_data_generator import generate_perfect_seasonality
+
+load_dotenv()
 
 # raw price fixtures (before ETL)
 
@@ -96,3 +99,13 @@ def df_rolling_combined(df_rolling_perfect, df_rolling_flat) -> pd.DataFrame:
     e.g. percentile ranking in flag_tickers.py.
     """
     return pd.concat([df_rolling_perfect, df_rolling_flat], ignore_index=True)
+
+
+@pytest.fixture(scope="session")
+def df_synth_combined(df_synth_perfect, df_synth_flat) -> pd.DataFrame:
+    """
+    Raw price data for both synthetic tickers concatenated.
+    Used by peak_analysis and any test that needs combined raw prices.
+    Mirrors df_rolling_combined but at the raw (pre-ETL) level.
+    """
+    return pd.concat([df_synth_perfect, df_synth_flat], ignore_index=True)

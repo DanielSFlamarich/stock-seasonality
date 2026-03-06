@@ -209,16 +209,11 @@ def save_report(report: dict, path: str | Path) -> None:
     Write the report dict to a JSON file.
 
     By convention, path should be under reports/report_json/.
-    The parent directory must already exist.
-
-    Parameters
-    ----------
-    report : dict
-        Output of generate_report().
-    path : str or Path
-        Destination file path.
+    The parent directory is created automatically if it does not exist.
+    ...
     """
     path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
     logger.info(f"Report saved to {path}")

@@ -475,6 +475,18 @@ class TestSaveReport:
         loaded = json.loads(out.read_text())
         assert len(loaded["tickers"]) == 2
 
+    def test_creates_parent_directory_if_missing(self, tmp_path, one_super_one_flat):
+        """
+        save_report must create the output directory if it does not exist.
+        """
+        df_flags, df_peaks, prompts_yaml = one_super_one_flat
+        report = generate_report(
+            df_flags, df_peaks, include_suggestions=False, prompt_config_path=prompts_yaml
+        )
+        out = tmp_path / "new_dir" / "sub" / "report.json"
+        save_report(report, out)
+        assert out.exists()
+
 
 # ---------------------------------------------------------------------------
 # _load_prompt_config error handling
@@ -522,25 +534,32 @@ class TestReportGeneratorIntegration:
     Run with: uv run pytest -m integration
     """
 
-    def test_full_pipeline_no_suggestions(self, df_rolling_combined, prompts_yaml):
-        """
-        build_features → flag_tickers → summarise_peaks → generate_report
-        produces a valid, JSON-serialisable report without LLM calls.
-        """
+    def test_full_pipeline_no_suggestions(
+        self, df_synth_combined, df_rolling_combined, prompts_yaml
+    ):
         from reporting.build_features import build_features
         from reporting.flag_tickers import flag_tickers
+        from reporting.peak_analysis import summarise_peaks
 
-        # build_features + flag_tickers operate on df_rolling
         df_features = build_features(df_rolling_combined)
-        flag_tickers(df_features)
+        df_flags = flag_tickers(df_features)
+        df_peaks = summarise_peaks(df_synth_combined, freqs=["ME", "QE"])
 
-        # peak_analysis needs raw prices — reconstruct a minimal price df
-        # from df_rolling_combined (date is window_start, close is not stored;
-        # use conftest fixtures directly instead)
-        pytest.skip(
-            "Integration test requires df_synth_combined fixture — "
-            "wire up in conftest when raw price fixtures are available."
+        report = generate_report(
+            df_flags,
+            df_peaks,
+            include_suggestions=False,
+            prompt_config_path=prompts_yaml,
         )
+
+        assert "tickers" in report
+        assert len(report["tickers"]) > 0
+        json.dumps(report)
+
+        tickers = report["tickers"]
+        supers = [t for t in tickers if t["superperformer"]]
+        non_supers = [t for t in tickers if not t["superperformer"]]
+        assert tickers == supers + non_supers
 
     def test_full_pipeline_with_synth_prices(
         self, df_synth_perfect, df_synth_flat, df_rolling_combined, prompts_yaml

@@ -1,0 +1,55 @@
+flowchart TD
+    %% ── INPUTS ──────────────────────────────────────────
+    CFG["config/tickers_list.yaml\n+ date range + intervals"]:::config
+    ENV["config/prompts.yaml\n+ .env / ANTHROPIC_API_KEY"]:::config
+
+    %% ── LAYER 1: DATA ───────────────────────────────────
+    subgraph DATA["Layer 1 · Data Ingestion"]
+        DL["DataLoader\ndata_loader.py"]
+        CACHE[("data/.cache/\n*.parquet\n(param-aware key)")]
+        DL -- cache hit --> CACHE
+        DL -- cache miss → yfinance --> CACHE
+    end
+
+    %% ── LAYER 2: ETL ────────────────────────────────────
+    subgraph ETL["Layer 2 · Seasonality ETL"]
+        direction TB
+        ACF["ACF\nacf_seasonality.py"]
+        P2M["P2M\nperiodogram_strength.py"]
+        STL["STL\nstl_strength.py\n⚠ NaN on short windows"]
+        META["Meta-scores\nmeta_scores.py\n(linear · geom · harmonic)"]
+        ACF & P2M & STL --> META
+    end
+
+    %% ── LAYER 3: REPORTING ──────────────────────────────
+    subgraph REPORTING["Layer 3 · Reporting"]
+        direction TB
+        BF["build_features.py\nmean · std · latest · trend\nper (ticker, freq)"]
+        FT["flag_tickers.py\nstl_available · low_window_count\npercentile ranks · superperformer_flag"]
+        PA["peak_analysis.py\nfind_peaks (IQR prominence)\npeak_count · mean/std gap days"]
+        RG["report_generator.py\nassemble JSON report\n+ LLM suggestions for superperformers"]
+        BF --> FT --> RG
+        PA --> RG
+    end
+
+    %% ── OUTPUTS ─────────────────────────────────────────
+    JSON["reports/report_json/\n*.json\n(gitignored)"]:::output
+    LLM["Anthropic API\nclaude-sonnet-4-6\nper superperformer (ticker, freq)"]:::external
+
+    %% ── FLOW ────────────────────────────────────────────
+    CFG --> DL
+    CACHE -- "df_prices\ndate · ticker · interval · close" --> ETL
+    CACHE -- "df_prices (raw)\nfor peak detection" --> PA
+    META -- "df_rolling\none row per (ticker, freq, window)" --> BF
+    ENV --> RG
+    RG -- include_suggestions=True --> LLM
+    LLM -- suggestion string or null --> RG
+    RG --> JSON
+
+    %% ── STL NaN POLICY NOTE ─────────────────────────────
+    STL -. "NaN → stl_available=False\nexcluded from STL percentile rank\nblocks superperformer_flag" .-> FT
+
+    %% ── STYLES ──────────────────────────────────────────
+    classDef config fill:#f5f0e8,stroke:#b5a98a,color:#333
+    classDef output fill:#e8f5e9,stroke:#81c784,color:#333
+    classDef external fill:#e8eaf6,stroke:#7986cb,color:#333
